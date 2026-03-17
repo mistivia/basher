@@ -13,12 +13,22 @@ import traceback
 ENDPOINT = os.environ.get("BASHER_API_ENDPOINT", "").strip()
 APIKEY = os.environ.get("BASHER_API_KEY", "").strip()
 MODEL = os.environ.get("BASHER_MODEL", "").strip()
+# Get reasoning param
+REASONING = os.environ.get("BASHER_REASONING", "").strip()
 
 if len(APIKEY) == 0 or len(ENDPOINT) == 0 or len(MODEL) == 0:
     print("Error: API key is not set. Please set the following environment variables:")
     print("  - BASHER_API_KEY: Your API key for the LLM service")
     print("  - BASHER_API_ENDPOINT: The API endpoint URL (e.g. https://openrouter.ai/api/v1/)")
     print("  - BASHER_MODEL: The model to use (e.g. moonshotai/kimi-k2.5)")
+    print("  - BASHER_REASONING: (Optional) Reasoning effort level: xhigh, high, medium, low, minimal, or none")
+    sys.exit(-1)
+
+# Validate REASONING if set
+VALID_REASONING_LEVELS = ["xhigh", "high", "medium", "low", "minimal", "none"]
+if len(REASONING) > 0 and REASONING not in VALID_REASONING_LEVELS:
+    print(f"Error: Invalid BASHER_REASONING value '{REASONING}'.")
+    print(f"Valid values are: {', '.join(VALID_REASONING_LEVELS)}")
     sys.exit(-1)
 
 
@@ -89,6 +99,9 @@ def req_llm_service(prompt):
         "messages": prompt,
         "stream": True
     }
+    # Add reasoning parameter if set
+    if len(REASONING) > 0:
+        payload["reasoning"] = {"effort": REASONING}
     headers = {
         "Content-Type": "application/json",
         "Authorization": f"Bearer {APIKEY}"

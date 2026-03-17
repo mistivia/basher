@@ -456,7 +456,6 @@ blacklist ${RUNUSER}/update-notifier.pid
 
 
 private .
-read-only ${HOME}/.git
 protocol unix,inet,inet6
 caps.drop all
 seccomp

@@ -26,6 +26,7 @@ To run Basher, you'll need to set a few environment variables prior to execution
 - `BASHER_API_ENDPOINT`: The API endpoint for the OpenAI-compatible LLM service. e.g. `https://openrouter.ai/api/v1/`.
 - `BASHER_API_KEY`: Your API key for authenticating with the LLM service.
 - `BASHER_MODEL`: The model to use for interaction. e.g. `moonshotai/kimi-k2.5`.
+- `BASHER_REASONING`: (Optional) Reasoning effort level: xhigh, high, medium, low, minimal, or none
 
 ### Run
 
@@ -44,7 +45,6 @@ This project provides a `basher.firejail.profile` for use with [Firejail](https:
 
 - Basher can only modify files in your current working directory;
 - Basher cannot read other files in your home directory (your browser cookies, passwords, etc. are safe);
-- Basher cannot modify `.git` in your current working directory. When Basher messed up your project, you can use `git reset` to recover.
 
 ### Usage
 
