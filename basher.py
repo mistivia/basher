@@ -306,14 +306,23 @@ def main():
         sys.stderr.reconfigure(line_buffering=True)
 
     init_max_ctx_len()
-    add_sys_content(sys_prompt())
-
+    
+    sysp = sys_prompt()
+    
+    # Load /etc/AGENTS.md if it exists
+    etc_agents_path = "/etc/AGENTS.md"
+    if os.path.isfile(etc_agents_path):
+        with open(etc_agents_path, "r", encoding="utf-8") as f:
+            etc_agents_content = f.read()
+        sysp += "\n\n---\n\n" + etc_agents_content
+    
+    # Load ./AGENTS.md if it exists
     agents_md_path = os.path.join(os.getcwd(), "AGENTS.md")
     if os.path.isfile(agents_md_path):
         with open(agents_md_path, "r", encoding="utf-8") as f:
             agents_content = f.read()
-        add_user_content("\nHere is the context infomation about this project:\n\n" + agents_content)
-
+        sysp += "\n\n---\n\n" + agents_content
+    add_sys_content(sysp)
     if len(sys.argv) < 2:
         print("Error: Please provide a task description.", flush=True)
         print("Usage: " + sys.argv[0] + " <task_description>", flush=True)
@@ -364,26 +373,6 @@ script. The intern will give you the return code and output of the bash
 script. So you can decide what to do next. The result of the bash
 script will be wrapped in a `<bash-output
 retcode="...">...</bash-output>` block.
-
----
-
-## Core Principles
-
-1. **Read before write.** Never modify a file you haven't read. Never
-   assume file contents.
-2. **Minimal diff.** Change only what is necessary. Do not refactor
-   unrelated code.
-3. **Think before acting.** Every `<bash>...</bash>` block must be
-   preceded by a brief explanation covering: -  What you are trying to
-   achieve in this step. -  Why this command is the right approach. -
-   What you predict the output will look like.
-4. **Verify after change.** Always run relevant build/lint/test
-   commands after making modifications.
-5. **Fail gracefully.** If a command fails, read the error carefully,
-   adjust your approach, then retry. After 3 failed attempts on the
-   same step, step back and reconsider the overall strategy.
-6. **Minimal edit.** If you can write a small python script to edit file, 
-don't rewrite the whole file again.
 
 ---
 
