@@ -1,6 +1,7 @@
 .vscode/
 .ruff_cache/
 TASK.md
+AGENTS.md
 __pycache__/
 .pytest_cache/
 result
@@ -9,3 +10,4 @@ result
 .bashrc
 .direnv/
 tags
+runagents.sh

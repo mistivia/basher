@@ -82,13 +82,14 @@ def compress_context():
 
 def run_llm_raw(prompt):
     err = None
-    for _ in range(3):
+    for _ in range(256):
         try:
             return req_llm_service(prompt)
         except Exception:
+            time.sleep(10)
             traceback.print_exc()
             continue
-    print("LLM service failed after 3 retries.")
+    print("LLM service failed after 256 retries.")
     sys.exit(-1)
     
 
