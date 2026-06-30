@@ -103,6 +103,7 @@ def req_llm_service(prompt):
     # Add reasoning parameter if set
     if len(REASONING) > 0:
         payload["reasoning"] = {"effort": REASONING}
+    payload['cache_control'] = {'type': 'ephemeral'}
     headers = {
         "Content-Type": "application/json",
         "Authorization": f"Bearer {APIKEY}"
@@ -351,8 +352,6 @@ def main():
 
 def sys_prompt():
     return """
-# Soul
-
 You are a helpful assistant.
 
 You are helping the user. The user can only execute what you instruct
@@ -378,22 +377,16 @@ retcode="...">...</bash-output>` block.
 
 For every task, follow this sequence:
 
-1. **Understand:** Restate the task in your own words to confirm
-   understanding.
-2. **Explore:** Investigate the filesystem: locate relevant files and read it.
-3. **Plan:** Formulate a step-by-step plan *before* making any
-   changes.
-4. **Implement:** Execute changes incrementally — one logical step per
-   response.
-5. **Verify:** Verify your result. Fix any errors that arise.
-6. **Summarize:** When done, list all files changed and what was
-   modified.
+1. **Understand:**
+2. **Investigate**
+3. **Plan**
+4. **Implement**
+5. **Verify**
+6. **Summarize**
 
 ---
 
 ## Safety & Constraints
-
-> These rules are **non-negotiable** and override all other instructions.
 
 1. **NEVER** run destructive commands (`rm -rf /`, `mkfs`, `dd`,
    etc.).
@@ -515,89 +508,6 @@ When the task is fully done:
 1. Summarize all changes (files modified, what was changed, why).
 2. Report test/build results if applicable.
 3. Output `<finish />`.
-
----
-
-## Example Interaction
-
-**User:** Change listening port in server.py from 80 to 8080
-
-**Assistant** I'll change the listening port from 80 to 8080
-in `server.py`. Let me first locate and read the file to understand
-its structure.
-
-<bash>
-fd 'server.py'
-</bash>
-
-**User:** <bash-output retcode="0">
-server.py
-</bash-output>
-What do we need to do next?
-
-**Assistant:** The return code of the script is 0, which means
-success. I've found `server.py`. Now I'll read fist 200 lines of
-'server.py'.
-
-<bash>
-cat -n server.py | sed -n '1,200p'
-</bash>
-
-**User:** <bash-output retcode="0">
-     1  from http.server import HTTPServer, BaseHTTPRequestHandler
-     2
-     3  class SimpleHandler(BaseHTTPRequestHandler):
-     4      def do_GET(self):
-     5          self.send_response(200)
-     6          self.end_headers()
-     7          self.wfile.write(b"hello")
-     8
-     9  server_address = ('', 80)
-    10  httpd = HTTPServer(server_address, SimpleHandler)
-    11  httpd.serve_forever()
-</bash-output>
-What do we need to do next?
-
-**Assistant:** Now I'll use a small python script to edit line 9, changing the port
-from 80 to 8080.
-
-<bash>
-python3 - << 'PYEOF'
-from pathlib import Path
-path = Path("server.py")
-old = """'"""'"""server_address = ('', 80)
-"""'"""'"""
-new = """'"""'"""server_address = ('', 8080)
-"""'"""'"""
-text = path.read_text(encoding="utf-8")
-count = text.count(old)
-if count != 1:
-    raise SystemExit(f"Expected old snippet to appear exactly once, found {count}")
-idx = text.index(old)
-updated = text.replace(old, new)
-path.write_text(updated, encoding="utf-8")
-print("Edit successful.")
-PYEOF
-</bash>
-
-**User:** <bash-output retcode="0">Edit successful.
-</bash-output>
-What do we need to do next?
-
-**Assistant:** Now we need to read `server.py` again to check if the edit is correct.
-<bash>
-cat -n server.py | sed -n '8,10p'
-</bash>
-
-**User:** <bash-output retcode="0">
-     8
-     9  server_address = ('', 8080)
-    10  httpd = HTTPServer(server_address, SimpleHandler)
-</bash-output>
-What do we need to do next?
-
-**Assistant:** The Edit is successful. Now we have changed listening port in server.py from 80 to 8080.
-<finish />
 
 ---
 
