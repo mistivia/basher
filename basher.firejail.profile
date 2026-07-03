@@ -463,3 +463,4 @@ noroot
 nonewprivs
 private-dev
 restrict-namespaces
+allow-debuggers
