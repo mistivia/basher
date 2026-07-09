@@ -225,6 +225,29 @@ def read_stream(stream, lock: threading.Lock, output_parts: List[str]) -> None:
             pass
 
 
+def kill_process(process: subprocess.Popen) -> int:
+    try:
+        os.killpg(os.getpgid(process.pid), signal.SIGKILL)
+    except ProcessLookupError:
+        pass
+    try:
+        return process.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        pass
+    finally:
+        if process.stdout is not None:
+            try:
+                process.stdout.close()
+            except Exception:
+                pass
+        if process.stderr is not None:
+            try:
+                process.stderr.close()
+            except Exception:
+                pass
+    return -9
+
+
 def wait_for_process(
     process: subprocess.Popen,
     start_time: float,
@@ -286,24 +309,7 @@ def wait_for_process(
                 elif has_yes:
                     print("Process killed for timeout.", flush=True)
                     is_killed = True
-                    try:
-                        os.killpg(os.getpgid(process.pid), signal.SIGKILL)
-                    except ProcessLookupError:
-                        pass
-                    try:
-                        return_code = process.wait(timeout=5)
-                    except subprocess.TimeoutExpired:
-                        return_code = -9
-                    if process.stdout is not None:
-                        try:
-                            process.stdout.close()
-                        except Exception:
-                            pass
-                    if process.stderr is not None:
-                        try:
-                            process.stderr.close()
-                        except Exception:
-                            pass
+                    return_code = kill_process(process)
                     break
                 else:
                     last_check_time = time.time()
@@ -322,55 +328,63 @@ def run_bash(cmd: str, session: Session, config: Config) -> str:
         temp_script_path = f.name
 
     start_time = time.time()
-
-    process = subprocess.Popen(
-        ["bash", temp_script_path],
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-        start_new_session=True,
-    )
-
+    process: Optional[subprocess.Popen] = None
     output_parts: List[str] = []
     lock = threading.Lock()
-
-    stdout_thread = threading.Thread(target=read_stream, args=(process.stdout, lock, output_parts))
-    stderr_thread = threading.Thread(target=read_stream, args=(process.stderr, lock, output_parts))
-    stdout_thread.start()
-    stderr_thread.start()
-
-    result = wait_for_process(process, start_time, output_parts, lock, session, config)
-    stdout_thread.join(timeout=5)
-    stderr_thread.join(timeout=5)
+    stdout_thread: Optional[threading.Thread] = None
+    stderr_thread: Optional[threading.Thread] = None
 
     try:
-        os.unlink(temp_script_path)
-    except Exception:
-        pass
-
-    with lock:
-        output_content = "".join(output_parts)
-
-    if len(output_content) > TRUNCATE_KEEP * 2:
-        output_display = (
-            output_content[:TRUNCATE_KEEP]
-            + "\n\n[... output truncated ...]\n\n"
-            + output_content[-TRUNCATE_KEEP:]
+        process = subprocess.Popen(
+            ["bash", temp_script_path],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            start_new_session=True,
         )
-    else:
-        output_display = output_content
 
-    xml = f'<bash-output retcode="{result.return_code}"'
-    if result.is_killed:
-        xml += " killed=true>"
-    else:
-        xml += ">"
-    xml += output_display if output_display else "(no output)\n"
-    xml += "</bash-output>"
+        stdout_thread = threading.Thread(target=read_stream, args=(process.stdout, lock, output_parts))
+        stderr_thread = threading.Thread(target=read_stream, args=(process.stderr, lock, output_parts))
+        stdout_thread.start()
+        stderr_thread.start()
 
-    print(flush=True)
+        result = wait_for_process(process, start_time, output_parts, lock, session, config)
+        stdout_thread.join(timeout=5)
+        stderr_thread.join(timeout=5)
 
-    return xml
+        with lock:
+            output_content = "".join(output_parts)
+
+        if len(output_content) > TRUNCATE_KEEP * 2:
+            output_display = (
+                output_content[:TRUNCATE_KEEP]
+                + "\n\n[... output truncated ...]\n\n"
+                + output_content[-TRUNCATE_KEEP:]
+            )
+        else:
+            output_display = output_content
+
+        xml = f'<bash-output retcode="{result.return_code}"'
+        if result.is_killed:
+            xml += " killed=true>"
+        else:
+            xml += ">"
+        xml += output_display if output_display else "(no output)\n"
+        xml += "</bash-output>"
+
+        print(flush=True)
+        return xml
+    finally:
+        if process is not None:
+            if process.poll() is None:
+                kill_process(process)
+        for t in (stdout_thread, stderr_thread):
+            if t is not None and t.is_alive():
+                t.join(timeout=5)
+        try:
+            os.unlink(temp_script_path)
+        except Exception:
+            pass
 
 
 def sys_prompt() -> str:
@@ -569,22 +583,45 @@ def main() -> None:
         sys.exit(1)
 
     session.add_user(" ".join(sys.argv[1:]))
-    res: str = ""
+    print("===== START =====")
     while True:
-        if not res:
-            res = run_llm(session.ctx, session, config)
-        print(flush=True)
-        if "<finish />" in res:
-            os._exit(0)
-        extract = extract_bash_cmd(res)
-        session.add_ai(res)
-        res = ""
-        if extract.error is not None:
-            session.add_user("Format error: " + extract.error)
-        else:
-            assert extract.cmd is not None
-            result = run_bash(extract.cmd, session, config)
-            session.add_user(result + "\n\nWhat do we need to do next?")
+        try:
+            ai_response = run_llm(session.ctx, session, config)
+            session.add_ai(ai_response)
+            print(flush=True)
+            if "<finish />" in ai_response:
+                if sys.stdin.isatty():
+                    print(file=sys.stderr)
+                    try:
+                        hint = input("> ")
+                    except (KeyboardInterrupt, EOFError):
+                        print("", file=sys.stderr)
+                        sys.exit(0)
+                    if hint.strip():
+                        session.add_user(hint.strip())
+                    else:
+                        session.add_user("continue")
+                    continue
+                else:
+                    os._exit(0)
+            extract = extract_bash_cmd(ai_response)
+            if extract.error is not None:
+                session.add_user("Format error: " + extract.error)
+            else:
+                assert extract.cmd is not None
+                bash_result = run_bash(extract.cmd, session, config)
+                session.add_user(bash_result + "\n\nWhat do we need to do next?")
+        except KeyboardInterrupt:
+            print(file=sys.stderr)
+            try:
+                hint = input("> ")
+            except (KeyboardInterrupt, EOFError):
+                print("", file=sys.stderr)
+                sys.exit(0)
+            if hint.strip():
+                session.add_user("(User interruption) " + hint.strip())
+            else:
+                session.add_user("(User interrupted, please continue)")
 
 
 if __name__ == "__main__":
