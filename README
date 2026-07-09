@@ -18,8 +18,14 @@ But Basher depends on these command line utils:
 
 * rg
 * fd
+* firejail
+* rlwrap
 
 Please make sure you have installed them.
+
+Then run:
+
+    sudo make install
 
 Usage
 =====
@@ -64,9 +70,3 @@ profile ensures that:
 
 [#] https://github.com/netblue30/firejail
 
-Usage
------
-
-Run Basher with Firejail:
-
-    firejail --profile=basher.firejail.profile python basher.py "your task here"
