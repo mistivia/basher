@@ -11,7 +11,7 @@ import threading
 import time
 import traceback
 import urllib.request
-from typing import List, NamedTuple, Optional, Union
+from typing import IO, List, NamedTuple, Optional, Union
 
 
 VALID_REASONING_LEVELS = ["xhigh", "high", "medium", "low", "minimal", "none"]
@@ -56,41 +56,47 @@ class ModelMeta(NamedTuple):
     model_name: str
 
 
-class Session:
-    def __init__(self, model: ModelMeta) -> None:
-        self.ctx: List[Message] = []
-        self.model: ModelMeta = model
+class Session(NamedTuple):
+    ctx: List[Message]
+    model: ModelMeta
 
-    def add_user(self, content: str) -> None:
-        self.ctx.append(Message(role="user", content=content))
 
-    def add_ai(self, content: str) -> None:
-        self.ctx.append(Message(role="assistant", content=content))
+def session_add_user(session: Session, content: str) -> None:
+    session.ctx.append(Message(role="user", content=content))
 
-    def add_sys(self, content: str) -> None:
-        self.ctx.append(Message(role="system", content=content))
 
-    def compress(self, config: Config) -> None:
-        if len(self.ctx) <= 2:
-            return
-        self.add_user(
-            "Now pause the work. Summarize the conversations above "
-            "concisely, preserving all important information and "
-            "context needed to continue the task."
-        )
-        summary, _ = run_llm_raw(self.ctx, config)
+def session_add_ai(session: Session, content: str) -> None:
+    session.ctx.append(Message(role="assistant", content=content))
 
-        new_ctx: List[Message] = [self.ctx[0]]
-        for i in range(1, len(self.ctx) - 1):
-            if self.ctx[i].role != "user":
-                break
-            new_ctx.append(self.ctx[i])
-        self.ctx = new_ctx
-        self.add_ai(
-            "The task has been running for a while. And the context is "
-            "too long so it has been truncated. Here is a summary of "
-            f"truncated context: \n\n{summary}"
-        )
+
+def session_add_sys(session: Session, content: str) -> None:
+    session.ctx.append(Message(role="system", content=content))
+
+
+def session_compress(session: Session, config: Config) -> None:
+    if len(session.ctx) <= 2:
+        return
+    session_add_user(
+        session,
+        "Now pause the work. Summarize the conversations above "
+        "concisely, preserving all important information and "
+        "context needed to continue the task."
+    )
+    summary, _ = run_llm_raw(session.ctx, config)
+
+    new_ctx: List[Message] = [session.ctx[0]]
+    for i in range(1, len(session.ctx) - 1):
+        if session.ctx[i].role != "user":
+            break
+        new_ctx.append(session.ctx[i])
+    session.ctx.clear()
+    session.ctx.extend(new_ctx)
+    session_add_ai(
+        session,
+        "The task has been running for a while. And the context is "
+        "too long so it has been truncated. Here is a summary of "
+        f"truncated context: \n\n{summary}"
+    )
 
 
 def load_config() -> Config:
@@ -194,7 +200,7 @@ def run_llm_raw(prompt: List[Message], config: Config) -> LLMResponse:
 def run_llm(prompt: List[Message], session: Session, config: Config) -> str:
     response = run_llm_raw(prompt, config)
     if session.model.context_length > 0 and response.usage > 0 and response.usage > 0.8 * session.model.context_length:
-        session.compress(config)
+        session_compress(session, config)
     return response.content
 
 
@@ -216,7 +222,7 @@ def extract_bash_cmd(s: str) -> BashCmdExtract:
     return BashCmd(cmd=matches[0].strip())
 
 
-def read_stream(stream, lock: threading.Lock, output_parts: List[str]) -> None:
+def read_stream(stream: IO[str], lock: threading.Lock, output_parts: List[str]) -> None:
     try:
         for line in stream:
             with lock:
@@ -281,32 +287,32 @@ def wait_for_process(
                 'Reply ONLY with `<answer>YES</answer>` or `<answer>NO</answer>` '
                 "and your reasons. Do NOT include `<bash>` or `<finish />` in your reply."
             )
-            session.add_user(question)
+            session_add_user(session, question)
 
             while True:
                 ai_response = run_llm(session.ctx, session, config)
-                session.add_ai(ai_response)
+                session_add_ai(session, ai_response)
 
                 has_bash_or_finish = "<bash>" in ai_response or "<finish />" in ai_response
                 has_yes = "<answer>YES</answer>" in ai_response
                 has_no = "<answer>NO</answer>" in ai_response
 
                 if has_bash_or_finish:
-                    session.add_user(
+                    session_add_user(session, 
                         "Invalid response: Your reply must NOT contain "
                         '`<bash>` or `<finish />`. '
                         'Reply ONLY with `<answer>YES</answer>` or '
                         '`<answer>NO</answer>` and your reasons.'
                     )
                 elif has_yes and has_no:
-                    session.add_user(
+                    session_add_user(session, 
                         "Invalid response: Both YES and NO found. "
                         'Please reply with `<answer>YES</answer>` to '
                         "kill the process or `<answer>NO</answer>` "
                         "to continue waiting, with your reasons."
                     )
                 elif not has_yes and not has_no:
-                    session.add_user(
+                    session_add_user(session, 
                         "Invalid response: Neither YES nor NO found. "
                         'Please reply with `<answer>YES</answer>` to '
                         "kill the process or `<answer>NO</answer>` "
@@ -627,7 +633,7 @@ def main() -> None:
 
     config = load_config()
     model = fetch_model_meta(config)
-    session = Session(model=model)
+    session = Session(ctx=[], model=model)
 
     sysp = sys_prompt()
 
@@ -643,7 +649,7 @@ def main() -> None:
             agents_content = f.read()
         sysp += "\n\n---\n\n" + agents_content
 
-    session.add_sys(sysp)
+    session_add_sys(session, sysp)
     task = " ".join(args).strip()
     while len(task) == 0:
         if no_interactive:
@@ -654,11 +660,11 @@ def main() -> None:
         except (KeyboardInterrupt, EOFError):
             print("Exit...", file=sys.stderr)
             sys.exit(0)
-    session.add_user(" ".join(task))
+    session_add_user(session, " ".join(task))
     while True:
         try:
             ai_response = run_llm(session.ctx, session, config)
-            session.add_ai(ai_response)
+            session_add_ai(session, ai_response)
             print(flush=True)
             extract = extract_bash_cmd(ai_response)
             if isinstance(extract, BashError):
@@ -672,15 +678,15 @@ def main() -> None:
                         print("Exit...", file=sys.stderr)
                         sys.exit(0)
                     if hint.strip():
-                        session.add_user(hint.strip())
+                        session_add_user(session, hint.strip())
                     else:
-                        session.add_user("continue")
+                        session_add_user(session, "continue")
                     continue
-                session.add_user("Format error: " + extract.error)
+                session_add_user(session, "Format error: " + extract.error)
             else:
                 assert isinstance(extract, BashCmd)
                 bash_result = run_bash(extract.cmd, session, config, use_firejail)
-                session.add_user(bash_result + "\n\nWhat do we need to do next?")
+                session_add_user(session, bash_result + "\n\nWhat do we need to do next?")
         except KeyboardInterrupt:
             if no_interactive or not sys.stdin.isatty():
                 print("Exit...", file=sys.stderr)
@@ -692,9 +698,9 @@ def main() -> None:
                 print("Exit...", file=sys.stderr)
                 sys.exit(0)
             if hint.strip():
-                session.add_user("(User interruption) " + hint.strip())
+                session_add_user(session, "(User interruption) " + hint.strip())
             else:
-                session.add_user("(User interrupted, please continue)")
+                session_add_user(session, "(User interrupted, please continue)")
 
 
 if __name__ == "__main__":
