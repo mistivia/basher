@@ -2,6 +2,7 @@
 import json
 import os
 import re
+import signal
 import subprocess
 import sys
 import tempfile
@@ -285,8 +286,24 @@ def wait_for_process(
                 elif has_yes:
                     print("Process killed for timeout.", flush=True)
                     is_killed = True
-                    process.kill()
-                    return_code = process.wait(timeout=5)
+                    try:
+                        os.killpg(os.getpgid(process.pid), signal.SIGKILL)
+                    except ProcessLookupError:
+                        pass
+                    try:
+                        return_code = process.wait(timeout=5)
+                    except subprocess.TimeoutExpired:
+                        return_code = -9
+                    if process.stdout is not None:
+                        try:
+                            process.stdout.close()
+                        except Exception:
+                            pass
+                    if process.stderr is not None:
+                        try:
+                            process.stderr.close()
+                        except Exception:
+                            pass
                     break
                 else:
                     last_check_time = time.time()
@@ -311,6 +328,7 @@ def run_bash(cmd: str, session: Session, config: Config) -> str:
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
+        start_new_session=True,
     )
 
     output_parts: List[str] = []
