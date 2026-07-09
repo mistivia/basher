@@ -9,5 +9,10 @@ result
 .Xauthority
 .bashrc
 .direnv/
+task.md
 tags
 runagents.sh
+.cache
+.local
+.npm
+.config
