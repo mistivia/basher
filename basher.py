@@ -2,6 +2,7 @@
 import json
 import os
 import re
+import shutil
 import signal
 import subprocess
 import sys
@@ -10,7 +11,7 @@ import threading
 import time
 import traceback
 import urllib.request
-from typing import List, NamedTuple, Optional
+from typing import List, NamedTuple, Optional, Union
 
 
 VALID_REASONING_LEVELS = ["xhigh", "high", "medium", "low", "minimal", "none"]
@@ -33,9 +34,16 @@ class LLMResponse(NamedTuple):
     usage: int
 
 
-class BashCmdExtract(NamedTuple):
-    cmd: Optional[str]
-    error: Optional[str]
+class BashCmd(NamedTuple):
+    cmd: str
+
+
+class BashError(NamedTuple):
+    error: str
+
+
+# Sum type: either a BashCmd (success) or BashError (failure)
+BashCmdExtract = Union[BashCmd, BashError]
 
 
 class ProcessResult(NamedTuple):
@@ -194,8 +202,7 @@ def extract_bash_cmd(s: str) -> BashCmdExtract:
     pattern = r"<bash>(.*?)</bash>"
     matches = re.findall(pattern, s, re.DOTALL)
     if not matches:
-        return BashCmdExtract(
-            cmd=None,
+        return BashError(
             error=(
                 "No executable bash commands found. Please provide a bash command. "
                 "If you find the task has already been completed, please summarize "
@@ -203,11 +210,10 @@ def extract_bash_cmd(s: str) -> BashCmdExtract:
             ),
         )
     if len(matches) > 1:
-        return BashCmdExtract(
-            cmd=None,
+        return BashError(
             error="Only one script can be executed at a time. Please provide a single bash script block.",
         )
-    return BashCmdExtract(cmd=matches[0].strip(), error=None)
+    return BashCmd(cmd=matches[0].strip())
 
 
 def read_stream(stream, lock: threading.Lock, output_parts: List[str]) -> None:
@@ -318,7 +324,19 @@ def wait_for_process(
     return ProcessResult(is_killed=is_killed, return_code=return_code)
 
 
-def run_bash(cmd: str, session: Session, config: Config) -> str:
+def check_firejail() -> bool:
+    firejail_profile = "/etc/firejail/basher.firejail.profile"
+    if not shutil.which("firejail"):
+        print("Error: firejail is not installed. Please install firejail or use --no-firejail.", file=sys.stderr)
+        sys.exit(-1)
+    if not os.path.isfile(firejail_profile):
+        print(f"Error: firejail profile not found at {firejail_profile}.", file=sys.stderr)
+        print("Please ensure basher.firejail.profile is installed to /etc/firejail/ or use --no-firejail.", file=sys.stderr)
+        sys.exit(-1)
+    return True
+
+
+def run_bash(cmd: str, session: Session, config: Config, use_firejail: bool = True) -> str:
     TRUNCATE_KEEP = 5000
 
     with tempfile.NamedTemporaryFile(mode="w", suffix=".sh", delete=False) as f:
@@ -327,7 +345,7 @@ def run_bash(cmd: str, session: Session, config: Config) -> str:
         f.write(cmd)
         temp_script_path = f.name
 
-    start_time = time.time()
+    start_time: float = time.time()
     process: Optional[subprocess.Popen] = None
     output_parts: List[str] = []
     lock = threading.Lock()
@@ -335,8 +353,12 @@ def run_bash(cmd: str, session: Session, config: Config) -> str:
     stderr_thread: Optional[threading.Thread] = None
 
     try:
+        if use_firejail:
+            cmd_list = ["firejail", "--profile=/etc/firejail/basher.firejail.profile", "bash", temp_script_path]
+        else:
+            cmd_list = ["bash", temp_script_path]
         process = subprocess.Popen(
-            ["bash", temp_script_path],
+            cmd_list,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
@@ -551,11 +573,57 @@ When the task is fully done:
 """.strip()
 
 
+def print_help() -> None:
+    print(
+        "Usage: basher.py [OPTIONS] [TASK]\n"
+        "\n"
+        "A CLI tool that uses an LLM to execute bash commands for a given task.\n"
+        "\n"
+        "Options:\n"
+        "  --help              Show this help message and exit.\n"
+        "  --no-firejail       Disable firejail sandboxing for bash commands.\n"
+        "  --no-interactive    Exit after the task completes instead of prompting\n"
+        "                      for further input.\n"
+        "\n"
+        "Environment Variables:\n"
+        "  BASHER_API_ENDPOINT  API endpoint URL (required)\n"
+        "                       e.g. https://openrouter.ai/api/v1/\n"
+        "  BASHER_API_KEY       API key for authentication (required)\n"
+        "  BASHER_MODEL         Model to use (required)\n"
+        "                       e.g. moonshotai/kimi-k2.5\n"
+        "  BASHER_REASONING     Reasoning effort level (optional)\n"
+        "                       Valid values: xhigh, high, medium, low, minimal, none\n"
+    )
+
+
 def main() -> None:
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(line_buffering=True)
     if hasattr(sys.stderr, "reconfigure"):
         sys.stderr.reconfigure(line_buffering=True)
+
+    # Parse command line arguments
+    args = sys.argv[1:]
+    use_firejail = True
+    no_interactive = False
+
+    # Parse flag arguments
+    while args and args[0].startswith("--"):
+        if args[0] == "--help":
+            print_help()
+            sys.exit(0)
+        elif args[0] == "--no-firejail":
+            use_firejail = False
+            args = args[1:]
+        elif args[0] == "--no-interactive":
+            no_interactive = True
+            args = args[1:]
+        else:
+            print(f"Unknown flag: {args[0]}", file=sys.stderr)
+            sys.exit(-1)
+
+    if use_firejail:
+        check_firejail()
 
     config = load_config()
     model = fetch_model_meta(config)
@@ -576,47 +644,52 @@ def main() -> None:
         sysp += "\n\n---\n\n" + agents_content
 
     session.add_sys(sysp)
-
-    if len(sys.argv) < 2:
-        print("Error: Please provide a task description.", flush=True)
-        print("Usage: " + sys.argv[0] + " <task_description>", flush=True)
-        sys.exit(1)
-
-    session.add_user(" ".join(sys.argv[1:]))
-    print("===== START =====")
+    task = " ".join(args).strip()
+    while len(task) == 0:
+        if no_interactive:
+            print("Error: no task provided and --no-interactive specified.", file=sys.stderr)
+            sys.exit(-1)
+        try:
+            task = input("> ")
+        except (KeyboardInterrupt, EOFError):
+            print("Exit...", file=sys.stderr)
+            sys.exit(0)
+    session.add_user(" ".join(task))
     while True:
         try:
             ai_response = run_llm(session.ctx, session, config)
             session.add_ai(ai_response)
             print(flush=True)
-            if "<finish />" in ai_response:
-                if sys.stdin.isatty():
+            extract = extract_bash_cmd(ai_response)
+            if isinstance(extract, BashError):
+                if "<finish />" in ai_response:
+                    if no_interactive or not sys.stdin.isatty():
+                        os._exit(0)
                     print(file=sys.stderr)
                     try:
                         hint = input("> ")
                     except (KeyboardInterrupt, EOFError):
-                        print("", file=sys.stderr)
+                        print("Exit...", file=sys.stderr)
                         sys.exit(0)
                     if hint.strip():
                         session.add_user(hint.strip())
                     else:
                         session.add_user("continue")
                     continue
-                else:
-                    os._exit(0)
-            extract = extract_bash_cmd(ai_response)
-            if extract.error is not None:
                 session.add_user("Format error: " + extract.error)
             else:
-                assert extract.cmd is not None
-                bash_result = run_bash(extract.cmd, session, config)
+                assert isinstance(extract, BashCmd)
+                bash_result = run_bash(extract.cmd, session, config, use_firejail)
                 session.add_user(bash_result + "\n\nWhat do we need to do next?")
         except KeyboardInterrupt:
+            if no_interactive or not sys.stdin.isatty():
+                print("Exit...", file=sys.stderr)
+                sys.exit(0)
             print(file=sys.stderr)
             try:
                 hint = input("> ")
             except (KeyboardInterrupt, EOFError):
-                print("", file=sys.stderr)
+                print("Exit...", file=sys.stderr)
                 sys.exit(0)
             if hint.strip():
                 session.add_user("(User interruption) " + hint.strip())

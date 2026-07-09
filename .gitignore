@@ -16,3 +16,4 @@ runagents.sh
 .local
 .npm
 .config
+.basher*
