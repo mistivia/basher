@@ -269,7 +269,7 @@ def wait_for_process(
     config: Config,
 ) -> ProcessResult:
     last_check_time = start_time
-    timeout_interval = 60
+    timeout_interval = 180
     is_killed = False
     return_code = process.poll()
 
@@ -526,6 +526,11 @@ to modify files by replacing an exact `old` code snippet with a `new` code snipp
    - implement a targeted edit (e.g., by line range / AST) with clear justification.
 4. If the script fails (old not found / too many matches), **stop and re-read**
    the file to adjust the snippet.
+5. **Escaping backslashes:** In Python string literals (including triple-quoted
+   strings), a single `\\` is an escape character. If your `old`/`new` snippets
+   contain literal backslashes, either:
+   - double them (`\\\\` represents one literal `\\`), or
+   - use a raw string: `r'''...'''` / `r\"\"\"...\"\"\"`.
 
 **Example (single exact replacement + context preview):**
 
