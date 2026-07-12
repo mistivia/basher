@@ -175,13 +175,12 @@ def req_llm_service(prompt: List[Message], config: Config) -> LLMResponse:
                 delta = choices[0].get("delta", {})
                 content = delta.get("content", "")
                 if content:
-                    print(content, end="", flush=True)
                     full_content += content
                 if "usage" in chunk and chunk["usage"]:
                     usage = chunk["usage"].get("total_tokens", 0)
             except json.JSONDecodeError:
                 continue
-    print(flush=True)
+    print(full_content, flush=True)
     return LLMResponse(content=full_content, usage=usage)
 
 
@@ -691,7 +690,7 @@ def main() -> None:
             else:
                 assert isinstance(extract, BashCmd)
                 bash_result = run_bash(extract.cmd, session, config, use_firejail)
-                session_add_user(session, bash_result + "\n\nWhat do we need to do next?")
+                session_add_user(session, bash_result)
         except KeyboardInterrupt:
             if no_interactive or not sys.stdin.isatty():
                 print("Exit...", file=sys.stderr)
