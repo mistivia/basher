@@ -268,7 +268,7 @@ def wait_for_process(
     config: Config,
 ) -> ProcessResult:
     last_check_time = start_time
-    timeout_interval = 180
+    timeout_interval = 60
     is_killed = False
     return_code = process.poll()
 
