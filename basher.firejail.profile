@@ -277,10 +277,6 @@ blacklist ${PATH}/mount.*
 blacklist ${PATH}/mountpoint
 blacklist ${PATH}/mtr
 blacklist ${PATH}/mtr-packet
-blacklist ${PATH}/nc
-blacklist ${PATH}/nc.openbsd
-blacklist ${PATH}/nc.traditional
-blacklist ${PATH}/ncat
 blacklist ${PATH}/netstat
 blacklist ${PATH}/networkctl
 blacklist ${PATH}/newgidmap
@@ -304,7 +300,6 @@ blacklist ${PATH}/pumount
 blacklist ${PATH}/schroot
 blacklist ${PATH}/sg
 blacklist ${PATH}/slock
-blacklist ${PATH}/ss
 blacklist ${PATH}/ssmtp
 blacklist ${PATH}/strace
 blacklist ${PATH}/su
