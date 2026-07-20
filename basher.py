@@ -106,11 +106,11 @@ def session_compress(session: Session, config: Config) -> None:
     )
 
 def exit_with_help():
-    print("Error: API key is not set. Please set the following environment variables:")
+    print("Error: Environment varaiables are invalid. Please check the following environment variables.")
     print("  - BASHER_API_KEY: Your API key for the LLM service")
     print("  - BASHER_API_ENDPOINT: The API endpoint URL (e.g. https://openrouter.ai/api/v1/)")
     print("  - BASHER_MODEL: The model to use (e.g. moonshotai/kimi-k2.5)")
-    print("  - BASHER_EXTRA_ARGS: (Optional) extra arguments in json")
+    print("  - BASHER_EXTRA_ARGS: (Optional) extra arguments in json (e.g. '{\"reasoning\": {\"effort\": \"xhigh\"}}')")
     sys.exit(-1)
 
 def load_config() -> Config:
