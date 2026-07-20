@@ -179,6 +179,16 @@ def req_llm_service(prompt: List[Message], config: Config) -> LLMResponse:
                 if not choices:
                     continue
                 delta = choices[0].get("delta", {})
+                # streamed reasoning details (e.g. openrouter)
+                reasoning_details = delta.get("reasoning_details", [])
+                for detail in reasoning_details:
+                    dtype = detail.get("type")
+                    if dtype != "reasoning.text" and dtype != "reasoning.summary":
+                        continue
+                    dtext = detail.get("text", "")
+                    if not dtext:
+                        continue
+                    print(f"\033[90m{dtext}\033[0m", flush=True, end="")
                 content = delta.get("content", "")
                 if content:
                     print(content, flush=True, end="")
