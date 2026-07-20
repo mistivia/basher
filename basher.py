@@ -66,22 +66,22 @@ class Session:
     model: ModelMeta
 
 
-def session_add_user(session: Session, content: str) -> None:
+def session_add_usermsg(session: Session, content: str) -> None:
     session.ctx.append(Message(role="user", content=content))
 
 
-def session_add_ai(session: Session, content: str) -> None:
+def session_add_aimsg(session: Session, content: str) -> None:
     session.ctx.append(Message(role="assistant", content=content))
 
 
-def session_add_sys(session: Session, content: str) -> None:
+def session_add_sysmsg(session: Session, content: str) -> None:
     session.ctx.append(Message(role="system", content=content))
 
 
 def session_compress(session: Session, config: Config) -> None:
     if len(session.ctx) <= 2:
         return
-    session_add_user(
+    session_add_usermsg(
         session,
         "The task has been running for a while. And the context is "
         "too long so it has tp be truncated. \n\n"
@@ -98,7 +98,7 @@ def session_compress(session: Session, config: Config) -> None:
         new_ctx.append(session.ctx[i])
     session.ctx.clear()
     session.ctx.extend(new_ctx)
-    session_add_ai(
+    session_add_aimsg(
         session,
         "The task has been running for a while. And the context is "
         "too long so it has been truncated. Here is a summary of "
@@ -304,32 +304,32 @@ def wait_for_process(
                 'Reply ONLY with `<answer>YES</answer>` or `<answer>NO</answer>` '
                 "and your reasons. Do NOT include `<bash>` or `<finish />` in your reply."
             )
-            session_add_user(session, question)
+            session_add_usermsg(session, question)
 
             while True:
                 ai_response = run_llm(session.ctx, session, config)
-                session_add_ai(session, ai_response)
+                session_add_aimsg(session, ai_response)
 
                 has_bash_or_finish = "<bash>" in ai_response or "<finish />" in ai_response
                 has_yes = "<answer>YES</answer>" in ai_response
                 has_no = "<answer>NO</answer>" in ai_response
 
                 if has_bash_or_finish:
-                    session_add_user(session, 
+                    session_add_usermsg(session, 
                         "Invalid response: Your reply must NOT contain "
                         '`<bash>` or `<finish />`. '
                         'Reply ONLY with `<answer>YES</answer>` or '
                         '`<answer>NO</answer>` and your reasons.'
                     )
                 elif has_yes and has_no:
-                    session_add_user(session, 
+                    session_add_usermsg(session, 
                         "Invalid response: Both YES and NO found. "
                         'Please reply with `<answer>YES</answer>` to '
                         "kill the process or `<answer>NO</answer>` "
                         "to continue waiting, with your reasons."
                     )
                 elif not has_yes and not has_no:
-                    session_add_user(session, 
+                    session_add_usermsg(session, 
                         "Invalid response: Neither YES nor NO found. "
                         'Please reply with `<answer>YES</answer>` to '
                         "kill the process or `<answer>NO</answer>` "
@@ -415,9 +415,125 @@ def run_bash(cmd: str, session: Session, config: Config) -> str:
         except Exception:
             pass
 
+def print_help() -> None:
+    print(
+        "Usage: basher.py [OPTIONS] [TASK]\n"
+        "\n"
+        "A CLI tool that uses an LLM to execute bash commands for a given task.\n"
+        "\n"
+        "Options:\n"
+        "  --help     Show this help message and exit.\n"
+        "  --batch    Exit after the task completes instead of prompting\n"
+        "             for further input.\n"
+        "\n"
+        "Environment Variables:\n"
+        "  BASHER_API_ENDPOINT  API endpoint URL (required)\n"
+        "                       e.g. https://openrouter.ai/api/v1/\n"
+        "  BASHER_API_KEY       API key for authentication (required)\n"
+        "  BASHER_MODEL         Model to use (required)\n"
+        "                       e.g. moonshotai/kimi-k2.5\n"
+        "  BASHER_EXTRA_ARGS    (Optional) extra arguments, in json\n"
+        "                       e.g. '{\"reasoning\": {\"effort\": \"xhigh\"}}'\n"
+    )
 
-def sys_prompt() -> str:
-    return """
+sys_prompt: List[str] = []
+
+def main() -> None:
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(line_buffering=True)
+    if hasattr(sys.stderr, "reconfigure"):
+        sys.stderr.reconfigure(line_buffering=True)
+
+    # Parse command line arguments
+    args = sys.argv[1:]
+    batch_mode = False
+
+    # Parse flag arguments
+    while args and args[0].startswith("--"):
+        if args[0] == "--help":
+            print_help()
+            sys.exit(0)
+        elif args[0] == "--batch":
+            batch_mode = True
+            args = args[1:]
+        else:
+            print(f"Unknown flag: {args[0]}", file=sys.stderr)
+            sys.exit(-1)
+
+    config = load_config()
+    model = fetch_model_meta(config)
+    session = Session(ctx=[], model=model)
+
+    sysp = sys_prompt[0]
+
+    etc_agents_path = "/etc/AGENTS.md"
+    if os.path.isfile(etc_agents_path):
+        with open(etc_agents_path, encoding="utf-8") as f:
+            etc_agents_content = f.read()
+        sysp += "\n\n---\n\n" + etc_agents_content
+
+    agents_md_path = os.path.join(os.getcwd(), "AGENTS.md")
+    if os.path.isfile(agents_md_path):
+        with open(agents_md_path, encoding="utf-8") as f:
+            agents_content = f.read()
+        sysp += "\n\n---\n\n" + agents_content
+
+    session_add_sysmsg(session, sysp)
+    task = " ".join(args).strip()
+    while len(task) == 0:
+        if batch_mode:
+            print("Error: no task provided and --batch specified.", file=sys.stderr)
+            sys.exit(-1)
+        try:
+            task = input("> ")
+        except (KeyboardInterrupt, EOFError):
+            print("Exit...", file=sys.stderr)
+            sys.exit(0)
+    session_add_usermsg(session, " ".join(task))
+    while True:
+        try:
+            ai_response = run_llm(session.ctx, session, config)
+            session_add_aimsg(session, ai_response)
+            print(flush=True)
+            extract = extract_bash_cmd(ai_response)
+            if isinstance(extract, BashError):
+                if "<finish />" in ai_response:
+                    if batch_mode or not sys.stdin.isatty():
+                        os._exit(0)
+                    print(file=sys.stderr)
+                    try:
+                        hint = input("> ")
+                    except (KeyboardInterrupt, EOFError):
+                        print("Exit...", file=sys.stderr)
+                        sys.exit(0)
+                    if hint.strip():
+                        session_add_usermsg(session, hint.strip())
+                    else:
+                        session_add_usermsg(session, "continue")
+                    continue
+                session_add_usermsg(session, "Format error: " + extract.error)
+            else:
+                assert isinstance(extract, BashCmd)
+                bash_result = run_bash(extract.cmd, session, config)
+                session_add_usermsg(session, bash_result)
+        except KeyboardInterrupt:
+            if batch_mode or not sys.stdin.isatty():
+                print("Exit...", file=sys.stderr)
+                sys.exit(0)
+            print(file=sys.stderr)
+            try:
+                hint = input("> ")
+            except (KeyboardInterrupt, EOFError):
+                print("Exit...", file=sys.stderr)
+                sys.exit(0)
+            if hint.strip():
+                session_add_usermsg(session, "(User interruption) " + hint.strip())
+            else:
+                session_add_usermsg(session, "(User interrupted, please continue)")
+
+
+sys_prompt.append("")
+sys_prompt[0] = """
 You are a helpful assistant.
 
 You are helping the user. The user can only execute what you instruct
@@ -588,124 +704,7 @@ When the task is fully done:
 
 ---
 
-""".strip()
-
-
-def print_help() -> None:
-    print(
-        "Usage: basher.py [OPTIONS] [TASK]\n"
-        "\n"
-        "A CLI tool that uses an LLM to execute bash commands for a given task.\n"
-        "\n"
-        "Options:\n"
-        "  --help     Show this help message and exit.\n"
-        "  --batch    Exit after the task completes instead of prompting\n"
-        "             for further input.\n"
-        "\n"
-        "Environment Variables:\n"
-        "  BASHER_API_ENDPOINT  API endpoint URL (required)\n"
-        "                       e.g. https://openrouter.ai/api/v1/\n"
-        "  BASHER_API_KEY       API key for authentication (required)\n"
-        "  BASHER_MODEL         Model to use (required)\n"
-        "                       e.g. moonshotai/kimi-k2.5\n"
-        "  BASHER_EXTRA_ARGS    (Optional) extra arguments, in json\n"
-        "                       e.g. '{\"reasoning\": {\"effort\": \"xhigh\"}}'\n"
-    )
-
-
-def main() -> None:
-    if hasattr(sys.stdout, "reconfigure"):
-        sys.stdout.reconfigure(line_buffering=True)
-    if hasattr(sys.stderr, "reconfigure"):
-        sys.stderr.reconfigure(line_buffering=True)
-
-    # Parse command line arguments
-    args = sys.argv[1:]
-    batch_mode = False
-
-    # Parse flag arguments
-    while args and args[0].startswith("--"):
-        if args[0] == "--help":
-            print_help()
-            sys.exit(0)
-        elif args[0] == "--batch":
-            batch_mode = True
-            args = args[1:]
-        else:
-            print(f"Unknown flag: {args[0]}", file=sys.stderr)
-            sys.exit(-1)
-
-    config = load_config()
-    model = fetch_model_meta(config)
-    session = Session(ctx=[], model=model)
-
-    sysp = sys_prompt()
-
-    etc_agents_path = "/etc/AGENTS.md"
-    if os.path.isfile(etc_agents_path):
-        with open(etc_agents_path, encoding="utf-8") as f:
-            etc_agents_content = f.read()
-        sysp += "\n\n---\n\n" + etc_agents_content
-
-    agents_md_path = os.path.join(os.getcwd(), "AGENTS.md")
-    if os.path.isfile(agents_md_path):
-        with open(agents_md_path, encoding="utf-8") as f:
-            agents_content = f.read()
-        sysp += "\n\n---\n\n" + agents_content
-
-    session_add_sys(session, sysp)
-    task = " ".join(args).strip()
-    while len(task) == 0:
-        if batch_mode:
-            print("Error: no task provided and --batch specified.", file=sys.stderr)
-            sys.exit(-1)
-        try:
-            task = input("> ")
-        except (KeyboardInterrupt, EOFError):
-            print("Exit...", file=sys.stderr)
-            sys.exit(0)
-    session_add_user(session, " ".join(task))
-    while True:
-        try:
-            ai_response = run_llm(session.ctx, session, config)
-            session_add_ai(session, ai_response)
-            print(flush=True)
-            extract = extract_bash_cmd(ai_response)
-            if isinstance(extract, BashError):
-                if "<finish />" in ai_response:
-                    if batch_mode or not sys.stdin.isatty():
-                        os._exit(0)
-                    print(file=sys.stderr)
-                    try:
-                        hint = input("> ")
-                    except (KeyboardInterrupt, EOFError):
-                        print("Exit...", file=sys.stderr)
-                        sys.exit(0)
-                    if hint.strip():
-                        session_add_user(session, hint.strip())
-                    else:
-                        session_add_user(session, "continue")
-                    continue
-                session_add_user(session, "Format error: " + extract.error)
-            else:
-                assert isinstance(extract, BashCmd)
-                bash_result = run_bash(extract.cmd, session, config)
-                session_add_user(session, bash_result)
-        except KeyboardInterrupt:
-            if batch_mode or not sys.stdin.isatty():
-                print("Exit...", file=sys.stderr)
-                sys.exit(0)
-            print(file=sys.stderr)
-            try:
-                hint = input("> ")
-            except (KeyboardInterrupt, EOFError):
-                print("Exit...", file=sys.stderr)
-                sys.exit(0)
-            if hint.strip():
-                session_add_user(session, "(User interruption) " + hint.strip())
-            else:
-                session_add_user(session, "(User interrupted, please continue)")
-
+""".strip() + '\n\n'
 
 if __name__ == "__main__":
     main()
