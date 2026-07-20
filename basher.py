@@ -345,7 +345,7 @@ def wait_for_process(
     return ProcessResult(is_killed=is_killed, return_code=return_code)
 
 def run_bash(cmd: str, session: Session, config: Config) -> str:
-    TRUNCATE_KEEP = 5000
+    TRUNCATE_KEEP = 2500
 
     with tempfile.NamedTemporaryFile(mode="w", suffix=".sh", delete=False) as f:
         f.write("#!/bin/bash\n")
@@ -569,17 +569,18 @@ Example:
     EOF
     </bash>
 
-## Controlling Output Volume
+### Output Volume
 
-- Pipe large outputs: `| head -n 50` or `| tail -n 50`.
-- For test results: `| tail -n 100` to see the summary.
-- For directory listings: `fd <pattern> | head -n 50`.
-- For logs: target specific sections, don't dump everything.
+Commands that may produce large output will be truncated.
+
+For potentially large outputs (logs, directory trees, test results),
+scope the command before running. If output might exceed ~200 lines,
+add filter or pagination.
 
 ## Completion
 
 When the task is fully done:
-1. Summarize all changes (files modified, what was changed, why).
+1. Summarize all changes (what was changed, why).
 2. Report test/build results if applicable.
 3. Output `<finish />`.
 
