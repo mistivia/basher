@@ -2,7 +2,6 @@
 import json
 import os
 import re
-import shutil
 import signal
 import subprocess
 import sys
@@ -11,52 +10,58 @@ import threading
 import time
 import traceback
 import urllib.request
-from typing import IO, List, NamedTuple, Optional, Union
+import readline
 
+from typing import IO, List, Optional, Union, Dict, Any
+from dataclasses import dataclass
 
-VALID_REASONING_LEVELS = ["xhigh", "high", "medium", "low", "minimal", "none"]
-
-
-class Message(NamedTuple):
+@dataclass
+class Message:
     role: str
     content: str
 
+def msg_to_dict(msg: Message) -> Dict[str, str]:
+    d = dict()
+    d['role'] = msg.role
+    d['content'] = msg.content
+    return d
 
-class Config(NamedTuple):
+@dataclass
+class Config:
     endpoint: str
     apikey: str
     model: str
-    reasoning: str
+    extra_args: Any
 
-
-class LLMResponse(NamedTuple):
+@dataclass
+class LLMResponse:
     content: str
     usage: int
 
-
-class BashCmd(NamedTuple):
+@dataclass
+class BashCmd:
     cmd: str
 
-
-class BashError(NamedTuple):
+@dataclass
+class BashError:
     error: str
 
 
 # Sum type: either a BashCmd (success) or BashError (failure)
 BashCmdExtract = Union[BashCmd, BashError]
 
-
-class ProcessResult(NamedTuple):
+@dataclass
+class ProcessResult:
     is_killed: bool
     return_code: Optional[int]
 
-
-class ModelMeta(NamedTuple):
+@dataclass
+class ModelMeta:
     context_length: int
     model_name: str
 
-
-class Session(NamedTuple):
+@dataclass
+class Session:
     ctx: List[Message]
     model: ModelMeta
 
@@ -82,7 +87,7 @@ def session_compress(session: Session, config: Config) -> None:
         "concisely, preserving all important information and "
         "context needed to continue the task."
     )
-    summary, _ = run_llm_raw(session.ctx, config)
+    summary = run_llm_raw(session.ctx, config)
 
     new_ctx: List[Message] = [session.ctx[0]]
     for i in range(1, len(session.ctx) - 1):
@@ -98,27 +103,28 @@ def session_compress(session: Session, config: Config) -> None:
         f"truncated context: \n\n{summary}"
     )
 
+def exit_with_help():
+    print("Error: API key is not set. Please set the following environment variables:")
+    print("  - BASHER_API_KEY: Your API key for the LLM service")
+    print("  - BASHER_API_ENDPOINT: The API endpoint URL (e.g. https://openrouter.ai/api/v1/)")
+    print("  - BASHER_MODEL: The model to use (e.g. moonshotai/kimi-k2.5)")
+    print("  - BASHER_EXTRA_ARGS: (Optional) extra arguments in json")
+    sys.exit(-1)
 
 def load_config() -> Config:
     endpoint = os.environ.get("BASHER_API_ENDPOINT", "").strip()
     apikey = os.environ.get("BASHER_API_KEY", "").strip()
     model = os.environ.get("BASHER_MODEL", "").strip()
-    reasoning = os.environ.get("BASHER_REASONING", "").strip()
+    extra_args = os.environ.get("BASHER_EXTRA_ARGS", "").strip()
 
     if not apikey or not endpoint or not model:
-        print("Error: API key is not set. Please set the following environment variables:")
-        print("  - BASHER_API_KEY: Your API key for the LLM service")
-        print("  - BASHER_API_ENDPOINT: The API endpoint URL (e.g. https://openrouter.ai/api/v1/)")
-        print("  - BASHER_MODEL: The model to use (e.g. moonshotai/kimi-k2.5)")
-        print("  - BASHER_REASONING: (Optional) Reasoning effort level: xhigh, high, medium, low, minimal, or none")
-        sys.exit(-1)
-
-    if reasoning and reasoning not in VALID_REASONING_LEVELS:
-        print(f"Error: Invalid BASHER_REASONING value '{reasoning}'.")
-        print(f"Valid values are: {', '.join(VALID_REASONING_LEVELS)}")
-        sys.exit(-1)
-
-    return Config(endpoint=endpoint, apikey=apikey, model=model, reasoning=reasoning)
+        exit_with_help()
+    eargs = None
+    if len(extra_args) > 0:
+        eargs = json.loads(extra_args)
+        if not isinstance(eargs, dict) and not len(eargs) > 0:
+            exit_with_help()
+    return Config(endpoint=endpoint, apikey=apikey, model=model, extra_args=eargs)
 
 
 def fetch_model_meta(config: Config) -> ModelMeta:
@@ -145,12 +151,12 @@ def req_llm_service(prompt: List[Message], config: Config) -> LLMResponse:
     url = config.endpoint.rstrip("/") + "/chat/completions"
     payload: dict = {
         "model": config.model,
-        "messages": [m._asdict() for m in prompt],
+        "messages": [msg_to_dict(m) for m in prompt],
         "stream": True,
     }
-    if config.reasoning:
-        payload["reasoning"] = {"effort": config.reasoning}
-    payload["cache_control"] = {"type": "ephemeral"}
+    if config.extra_args:
+        for k, v in config.extra_args.items():
+            payload[k] = v
     headers = {
         "Content-Type": "application/json",
         "Authorization": f"Bearer {config.apikey}",
@@ -175,12 +181,12 @@ def req_llm_service(prompt: List[Message], config: Config) -> LLMResponse:
                 delta = choices[0].get("delta", {})
                 content = delta.get("content", "")
                 if content:
+                    print(content, flush=True, end="")
                     full_content += content
                 if "usage" in chunk and chunk["usage"]:
                     usage = chunk["usage"].get("total_tokens", 0)
             except json.JSONDecodeError:
                 continue
-    print(full_content, flush=True)
     return LLMResponse(content=full_content, usage=usage)
 
 
@@ -328,20 +334,7 @@ def wait_for_process(
 
     return ProcessResult(is_killed=is_killed, return_code=return_code)
 
-
-def check_firejail() -> bool:
-    firejail_profile = "/etc/firejail/basher.firejail.profile"
-    if not shutil.which("firejail"):
-        print("Error: firejail is not installed. Please install firejail or use --no-firejail.", file=sys.stderr)
-        sys.exit(-1)
-    if not os.path.isfile(firejail_profile):
-        print(f"Error: firejail profile not found at {firejail_profile}.", file=sys.stderr)
-        print("Please ensure basher.firejail.profile is installed to /etc/firejail/ or use --no-firejail.", file=sys.stderr)
-        sys.exit(-1)
-    return True
-
-
-def run_bash(cmd: str, session: Session, config: Config, use_firejail: bool = True) -> str:
+def run_bash(cmd: str, session: Session, config: Config) -> str:
     TRUNCATE_KEEP = 5000
 
     with tempfile.NamedTemporaryFile(mode="w", suffix=".sh", delete=False) as f:
@@ -358,10 +351,7 @@ def run_bash(cmd: str, session: Session, config: Config, use_firejail: bool = Tr
     stderr_thread: Optional[threading.Thread] = None
 
     try:
-        if use_firejail:
-            cmd_list = ["firejail", "--profile=/etc/firejail/basher.firejail.profile", "bash", temp_script_path]
-        else:
-            cmd_list = ["bash", temp_script_path]
+        cmd_list = ["bash", temp_script_path]
         process = subprocess.Popen(
             cmd_list,
             stdout=subprocess.PIPE,
@@ -466,6 +456,11 @@ For every task, follow this sequence:
 ---
 
 ## Bash Cookbook
+
+## Current Directory
+
+You starting directory is FIXED. And your `cd` command will only affect current
+script. So each bash scirpt might start with `cd`.
 
 ### Finding Files
 
@@ -590,10 +585,9 @@ def print_help() -> None:
         "A CLI tool that uses an LLM to execute bash commands for a given task.\n"
         "\n"
         "Options:\n"
-        "  --help              Show this help message and exit.\n"
-        "  --no-firejail       Disable firejail sandboxing for bash commands.\n"
-        "  --no-interactive    Exit after the task completes instead of prompting\n"
-        "                      for further input.\n"
+        "  --help     Show this help message and exit.\n"
+        "  --batch    Exit after the task completes instead of prompting\n"
+        "             for further input.\n"
         "\n"
         "Environment Variables:\n"
         "  BASHER_API_ENDPOINT  API endpoint URL (required)\n"
@@ -601,8 +595,8 @@ def print_help() -> None:
         "  BASHER_API_KEY       API key for authentication (required)\n"
         "  BASHER_MODEL         Model to use (required)\n"
         "                       e.g. moonshotai/kimi-k2.5\n"
-        "  BASHER_REASONING     Reasoning effort level (optional)\n"
-        "                       Valid values: xhigh, high, medium, low, minimal, none\n"
+        "  BASHER_EXTRA_ARGS    (Optional) extra arguments, in json\n"
+        "                       e.g. '{\"reasoning\": {\"effort\": \"xhigh\"}}'\n"
     )
 
 
@@ -614,26 +608,19 @@ def main() -> None:
 
     # Parse command line arguments
     args = sys.argv[1:]
-    use_firejail = True
-    no_interactive = False
+    batch_mode = False
 
     # Parse flag arguments
     while args and args[0].startswith("--"):
         if args[0] == "--help":
             print_help()
             sys.exit(0)
-        elif args[0] == "--no-firejail":
-            use_firejail = False
-            args = args[1:]
-        elif args[0] == "--no-interactive":
-            no_interactive = True
+        elif args[0] == "--batch":
+            batch_mode = True
             args = args[1:]
         else:
             print(f"Unknown flag: {args[0]}", file=sys.stderr)
             sys.exit(-1)
-
-    if use_firejail:
-        check_firejail()
 
     config = load_config()
     model = fetch_model_meta(config)
@@ -656,8 +643,8 @@ def main() -> None:
     session_add_sys(session, sysp)
     task = " ".join(args).strip()
     while len(task) == 0:
-        if no_interactive:
-            print("Error: no task provided and --no-interactive specified.", file=sys.stderr)
+        if batch_mode:
+            print("Error: no task provided and --batch specified.", file=sys.stderr)
             sys.exit(-1)
         try:
             task = input("> ")
@@ -673,7 +660,7 @@ def main() -> None:
             extract = extract_bash_cmd(ai_response)
             if isinstance(extract, BashError):
                 if "<finish />" in ai_response:
-                    if no_interactive or not sys.stdin.isatty():
+                    if batch_mode or not sys.stdin.isatty():
                         os._exit(0)
                     print(file=sys.stderr)
                     try:
@@ -689,10 +676,10 @@ def main() -> None:
                 session_add_user(session, "Format error: " + extract.error)
             else:
                 assert isinstance(extract, BashCmd)
-                bash_result = run_bash(extract.cmd, session, config, use_firejail)
+                bash_result = run_bash(extract.cmd, session, config)
                 session_add_user(session, bash_result)
         except KeyboardInterrupt:
-            if no_interactive or not sys.stdin.isatty():
+            if batch_mode or not sys.stdin.isatty():
                 print("Exit...", file=sys.stderr)
                 sys.exit(0)
             print(file=sys.stderr)
