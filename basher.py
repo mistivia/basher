@@ -15,6 +15,8 @@ import readline
 from typing import IO, List, Optional, Union, Dict, Any
 from dataclasses import dataclass
 
+VER = "1.0.0"
+
 @dataclass
 class Message:
     role: str
@@ -162,6 +164,7 @@ def req_llm_service(prompt: List[Message], config: Config) -> LLMResponse:
     headers = {
         "Content-Type": "application/json",
         "Authorization": f"Bearer {config.apikey}",
+        "User-Agent": f"Basher/{VER}",
     }
     data = json.dumps(payload).encode("utf-8")
     req = urllib.request.Request(url, data=data, headers=headers, method="POST")
