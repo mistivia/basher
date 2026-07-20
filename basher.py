@@ -345,7 +345,7 @@ def wait_for_process(
     return ProcessResult(is_killed=is_killed, return_code=return_code)
 
 def run_bash(cmd: str, session: Session, config: Config) -> str:
-    TRUNCATE_KEEP = 2500
+    TRUNCATE_KEEP = 5000
 
     with tempfile.NamedTemporaryFile(mode="w", suffix=".sh", delete=False) as f:
         f.write("#!/bin/bash\n")
