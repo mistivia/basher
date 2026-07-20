@@ -83,6 +83,8 @@ def session_compress(session: Session, config: Config) -> None:
         return
     session_add_user(
         session,
+        "The task has been running for a while. And the context is "
+        "too long so it has tp be truncated. \n\n"
         "Now pause the work. Summarize the conversations above "
         "concisely, preserving all important information and "
         "context needed to continue the task."
