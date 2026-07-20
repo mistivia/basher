@@ -214,7 +214,7 @@ def run_llm_raw(prompt: List[Message], config: Config) -> LLMResponse:
 
 def run_llm(prompt: List[Message], session: Session, config: Config) -> str:
     response = run_llm_raw(prompt, config)
-    if session.model.context_length > 0 and response.usage > 0 and response.usage > 0.8 * session.model.context_length:
+    if session.model.context_length > 0 and response.usage > 0 and response.usage > 0.7 * session.model.context_length:
         session_compress(session, config)
     return response.content
 
