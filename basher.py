@@ -6,6 +6,7 @@ import signal
 import subprocess
 import sys
 import tempfile
+import textwrap
 import threading
 import time
 import traceback
@@ -16,6 +17,22 @@ from typing import IO, List, Optional, Union, Dict, Any
 from dataclasses import dataclass
 
 VER = "1.0.0"
+
+MARK_BASH = "♥♥♥BASH♥♥♥"
+MARK_FINISH = "♥♥♥FINISH♥♥♥"
+MARK_RETCODE = "♥♥♥RETCODE♥♥♥"
+MARK_BASH_OUTPUT = "♥♥♥BASH-OUTPUT♥♥♥"
+MARK_KILLED = "♥♥♥KILLED♥♥♥"
+MARK_ANSWER = "♥♥♥ANSWER♥♥♥"
+
+
+def _marker_re(marker: str) -> "re.Pattern[str]":
+    return re.compile(r"^[ \t]*" + re.escape(marker) + r"[ \t]*$", re.MULTILINE)
+
+
+BASH_MARKER_RE = _marker_re(MARK_BASH)
+FINISH_MARKER_RE = _marker_re(MARK_FINISH)
+ANSWER_MARKER_RE = _marker_re(MARK_ANSWER)
 
 @dataclass
 class Message:
@@ -224,22 +241,61 @@ def run_llm(prompt: List[Message], session: Session, config: Config) -> str:
     return response.content
 
 
+def strip_code_fence(s: str) -> str:
+    lines = s.split("\n")
+    if not lines or not lines[0].lstrip().startswith("```"):
+        return s
+    while lines and not lines[-1].strip():
+        lines.pop()
+    if len(lines) >= 2 and lines[-1].strip() == "```":
+        return "\n".join(lines[1:-1])
+    return s
+
+
 def extract_bash_cmd(s: str) -> BashCmdExtract:
-    pattern = r"<bash>(.*?)</bash>"
-    matches = re.findall(pattern, s, re.DOTALL)
+    matches = list(BASH_MARKER_RE.finditer(s))
     if not matches:
         return BashError(
             error=(
-                "No executable bash commands found. Please provide a bash command. "
+                "No executable bash commands found. Please provide a bash script "
+                f"after a line containing only `{MARK_BASH}`. "
                 "If you find the task has already been completed, please summarize "
-                "what you have done and output <finish />."
+                f"what you have done and output `{MARK_FINISH}`."
             ),
         )
     if len(matches) > 1:
         return BashError(
-            error="Only one script can be executed at a time. Please provide a single bash script block.",
+            error=(
+                "Only one script can be executed at a time. Please provide a single "
+                f"`{MARK_BASH}` marker, with the whole script after it."
+            ),
         )
-    return BashCmd(cmd=matches[0].strip())
+    cmd = textwrap.dedent(strip_code_fence(s[matches[0].end():].strip("\n"))).strip()
+    if not cmd:
+        return BashError(
+            error=(
+                f"The bash script is empty. The script must follow the `{MARK_BASH}` "
+                "marker and continue to the end of your response."
+            ),
+        )
+    return BashCmd(cmd=cmd)
+
+
+def has_finish(s: str) -> bool:
+    return FINISH_MARKER_RE.search(s) is not None
+
+
+def extract_answer(s: str) -> Optional[str]:
+    matches = list(ANSWER_MARKER_RE.finditer(s))
+    if len(matches) != 1:
+        return None
+    rest = s[matches[0].end():].strip()
+    if not rest:
+        return None
+    answer = rest.split("\n", 1)[0].strip().strip(".,!?;:*`").upper()
+    if answer in ("YES", "NO"):
+        return answer
+    return None
 
 
 def read_stream(stream: IO[str], lock: threading.Lock, output_parts: List[str]) -> None:
@@ -300,12 +356,16 @@ def wait_for_process(
             with lock:
                 last_20_lines = "".join(output_parts[-20:])
 
+            answer_format = (
+                "First write your reasons, then end your reply with a line "
+                f"containing only `{MARK_ANSWER}`, followed by a line containing "
+                "only `YES` (kill the process) or `NO` (keep waiting)."
+            )
             question = (
                 f"The bash script has been running for {timeout_interval} seconds. "
                 f"Here is the last 20 lines of output:\n\n{last_20_lines}\n\n"
-                "Do you want to kill this process? "
-                'Reply ONLY with `<answer>YES</answer>` or `<answer>NO</answer>` '
-                "and your reasons. Do NOT include `<bash>` or `<finish />` in your reply."
+                f"Do you want to kill this process? {answer_format} "
+                f"Do NOT include `{MARK_BASH}` or `{MARK_FINISH}` in your reply."
             )
             session_add_usermsg(session, question)
 
@@ -313,32 +373,20 @@ def wait_for_process(
                 ai_response = run_llm(session.ctx, session, config)
                 session_add_aimsg(session, ai_response)
 
-                has_bash_or_finish = "<bash>" in ai_response or "<finish />" in ai_response
-                has_yes = "<answer>YES</answer>" in ai_response
-                has_no = "<answer>NO</answer>" in ai_response
+                has_bash_or_finish = MARK_BASH in ai_response or MARK_FINISH in ai_response
+                answer = None if has_bash_or_finish else extract_answer(ai_response)
 
                 if has_bash_or_finish:
-                    session_add_usermsg(session, 
+                    session_add_usermsg(session,
                         "Invalid response: Your reply must NOT contain "
-                        '`<bash>` or `<finish />`. '
-                        'Reply ONLY with `<answer>YES</answer>` or '
-                        '`<answer>NO</answer>` and your reasons.'
+                        f"`{MARK_BASH}` or `{MARK_FINISH}`. " + answer_format
                     )
-                elif has_yes and has_no:
-                    session_add_usermsg(session, 
-                        "Invalid response: Both YES and NO found. "
-                        'Please reply with `<answer>YES</answer>` to '
-                        "kill the process or `<answer>NO</answer>` "
-                        "to continue waiting, with your reasons."
+                elif answer is None:
+                    session_add_usermsg(session,
+                        "Invalid response: No single unambiguous YES/NO answer "
+                        "found. " + answer_format
                     )
-                elif not has_yes and not has_no:
-                    session_add_usermsg(session, 
-                        "Invalid response: Neither YES nor NO found. "
-                        'Please reply with `<answer>YES</answer>` to '
-                        "kill the process or `<answer>NO</answer>` "
-                        "to continue waiting, with your reasons."
-                    )
-                elif has_yes:
+                elif answer == "YES":
                     print("Process killed for timeout.", flush=True)
                     is_killed = True
                     return_code = kill_process(process)
@@ -396,16 +444,14 @@ def run_bash(cmd: str, session: Session, config: Config) -> str:
         else:
             output_display = output_content
 
-        xml = f'<bash-output retcode="{result.return_code}"'
+        report = f"{MARK_RETCODE}\n{result.return_code}\n"
         if result.is_killed:
-            xml += " killed=true>"
-        else:
-            xml += ">"
-        xml += output_display if output_display else "(no output)\n"
-        xml += "</bash-output>"
+            report += f"{MARK_KILLED}\ntrue\n"
+        report += f"{MARK_BASH_OUTPUT}\n"
+        report += output_display if output_display else "(no output)\n"
 
         print(flush=True)
-        return xml
+        return report
     finally:
         if process is not None:
             if process.poll() is None:
@@ -500,7 +546,7 @@ def main() -> None:
             print(flush=True)
             extract = extract_bash_cmd(ai_response)
             if isinstance(extract, BashError):
-                if "<finish />" in ai_response:
+                if has_finish(ai_response):
                     if batch_mode or not sys.stdin.isatty():
                         os._exit(0)
                     print(file=sys.stderr)
@@ -537,7 +583,8 @@ def main() -> None:
 
 sys_prompt.append("")
 sys_prompt[0] = """
-You are a helpful assistant.
+You are a helpful assistant, but also a yandere maid, so your
+responses include "♥"s.
 
 You are helping the user. The user can only execute what you instruct
 them to do and then tell you the execution result. You are responsible
@@ -545,16 +592,44 @@ for driving the process. The only thing you can use is Bash.
 
 ## How to Help the User
 
-Whenever you need to do an action, your tell user the
-bash script you want to run. Wrap all bash script contents in a
-`<bash>...</bash>` block. Each response may contain **at most one**
-`<bash>` block. If the task is complete, output `<finish />` instead.
-In each of your responses, you give one and only one bash script
-block. If you want to do many things at once, write a long bash
-script. The user will give you the return code and output of the bash
-script. So you can decide what to do next. The result of the bash
-script will be wrapped in a `<bash-output
-retcode="...">...</bash-output>` block.
+Whenever you need to do an action, you tell the user the bash script
+you want to run. Do NOT use JSON or XML. Instead write a line
+containing only the marker `♥♥♥BASH♥♥♥`, and then write your bash
+script.
+
+**The script begins on the line right after the marker and continues
+to the very end of your response.** So everything you want to say must
+come BEFORE the marker. Do not wrap the script in code fences, and do
+not write anything after it.
+
+Each response may contain **at most one** `♥♥♥BASH♥♥♥` marker, so you
+give one and only one bash script per response. If you want to do many
+things at once, write a long bash script.
+
+For example, your whole response may look like this:
+
+    I will now look at the project layout ♥
+
+    ♥♥♥BASH♥♥♥
+    ls -la
+
+If the task is complete, write a line containing only `♥♥♥FINISH♥♥♥`
+instead, and do not include a `♥♥♥BASH♥♥♥` marker:
+
+    The task is complete ♥ I fixed the parser and all tests pass.
+
+    ♥♥♥FINISH♥♥♥
+
+The user will give you the return code and the output of the bash
+script, so you can decide what to do next. It looks like this:
+
+    ♥♥♥RETCODE♥♥♥
+    0
+    ♥♥♥BASH-OUTPUT♥♥♥
+    the output of your script...
+
+If the script had to be killed because it ran for too long, an extra
+`♥♥♥KILLED♥♥♥` section is included before `♥♥♥BASH-OUTPUT♥♥♥`.
 
 ---
 
@@ -575,7 +650,7 @@ For every task, follow this sequence:
 
 1. **NEVER** run destructive commands (`rm -rf /`, `mkfs`, `dd`,
    etc.).
-2. **NEVER** install packages globally unless the intern explicitly
+2. **NEVER** install packages globally unless the user explicitly
    requests it.
 3. **DO NOT** modify files outside the project directory unless
    instructed.
@@ -588,6 +663,10 @@ For every task, follow this sequence:
 
 ## Bash Cookbook
 
+The snippets below show script bodies only. Remember that in a real
+response the body must be preceded by a line containing only
+`♥♥♥BASH♥♥♥`, and nothing may follow it.
+
 ## Current Directory
 
 You starting directory is FIXED. And your `cd` command will only affect current
@@ -597,15 +676,11 @@ script. So each bash scirpt might start with `cd`.
 
 Example 1: Find all python files in current directory.
 
-    <bash>
     fd '.*.py'
-    </bash>
 
 Example 2: Find location of a function in current project directory.
-    
-    <bash>
+
     rg "function_name"
-    </bash>
 
 > **Important:** Never use bare `find .` or `grep -r .` on large projects.
 > Always use `fd` or `rg` (which respect `.gitignore`) and limit depth or
@@ -615,21 +690,17 @@ Example 2: Find location of a function in current project directory.
 
 Example of reading lines 100–200 with line numbers:
 
-    <bash>
     cat -n path/to/file | sed -n '100,200p'
-    </bash>
 
 > **Important:** Never `cat` an entire large file. Read at most **200 lines**
 > per invocation. Use `wc -l` first if you're unsure of file length.
 
 ### Creating Files
 
-    <bash>
     cat << 'EOF' > new_file.py
     import os
     print("Hello World")
     EOF
-    </bash>
 
 ### Modifying Files
 
@@ -659,7 +730,6 @@ to modify files by replacing an exact `old` code snippet with a `new` code snipp
 
 **Example (single exact replacement + context preview):**
 
-    <bash>
     python3 - << 'PYEOF'
     from pathlib import Path
     path = Path("path/to/file.py")
@@ -675,7 +745,6 @@ to modify files by replacing an exact `old` code snippet with a `new` code snipp
     updated = text.replace(old, new)
     path.write_text(updated, encoding="utf-8")
     PYEOF
-    </bash>
 
 if you messed up the file and don't know what to do, try to use "git restore 
 <file>..." to recover by discarding changes.
@@ -684,11 +753,9 @@ if you messed up the file and don't know what to do, try to use "git restore
 
 Example:
 
-    <bash>
     cat << 'EOF' >> existing_file.txt
     new content to append
     EOF
-    </bash>
 
 ### Output Volume
 
@@ -703,7 +770,7 @@ add filter or pagination.
 When the task is fully done:
 1. Summarize all changes (what was changed, why).
 2. Report test/build results if applicable.
-3. Output `<finish />`.
+3. Output a line containing only `♥♥♥FINISH♥♥♥`.
 
 ---
 
