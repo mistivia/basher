@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+import atexit
+import glob
+import gzip
 import json
 import os
 import re
@@ -17,6 +20,11 @@ from typing import IO, List, Optional, Union, Dict, Any
 from dataclasses import dataclass
 
 VER = "1.0.0"
+
+# Sessions live inside the working directory, so each project keeps its own
+# history. Only the latest one is kept.
+SESSION_DIR = os.path.join(".basher", "sessions")
+SESSION_FILE = "session.json.gz"
 
 MARK_BASH = "♥♥♥BASH♥♥♥"
 MARK_FINISH = "♥♥♥FINISH♥♥♥"
@@ -83,6 +91,125 @@ class ModelMeta:
 class Session:
     ctx: List[Message]
     model: ModelMeta
+    cwd: str = ""
+
+@dataclass
+class SavedSession:
+    ctx: List[Message]
+    model: ModelMeta
+
+
+def session_dir(cwd: str) -> str:
+    return os.path.join(cwd, SESSION_DIR)
+
+
+def session_file(cwd: str) -> str:
+    return os.path.join(session_dir(cwd), SESSION_FILE)
+
+
+def ensure_session_dir(cwd: str) -> None:
+    try:
+        os.makedirs(session_dir(cwd), exist_ok=True)
+    except Exception as e:
+        print(f"Warning: failed to create {session_dir(cwd)}: {e}", file=sys.stderr)
+
+
+_saved_session: Optional[Session] = None
+_session_is_saved = False
+
+
+def save_session(session: Optional[Session]) -> Optional[str]:
+    """Dump the conversation history to ./.basher/sessions/session.json.gz."""
+    global _session_is_saved
+    if session is None or _session_is_saved:
+        return None
+    # nothing worth saving: only the system prompt (or not even that)
+    if len(session.ctx) <= 1:
+        return None
+    _session_is_saved = True
+    try:
+        ensure_session_dir(session.cwd)
+        data = {
+            "version": VER,
+            "cwd": session.cwd,
+            "saved_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+            "model": {
+                "model_name": session.model.model_name,
+                "context_length": session.model.context_length,
+            },
+            "messages": [msg_to_dict(m) for m in session.ctx],
+        }
+        path = session_file(session.cwd)
+        # write to a temporary file first, so an interrupted dump cannot
+        # destroy the previous session
+        tmp_path = path + ".tmp"
+        with gzip.open(tmp_path, "wt", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False)
+        os.replace(tmp_path, path)
+        # only one session is kept: drop anything else left in the directory
+        for stale in glob.glob(os.path.join(session_dir(session.cwd), "*.json.gz")):
+            if os.path.abspath(stale) != os.path.abspath(path):
+                try:
+                    os.unlink(stale)
+                except Exception:
+                    pass
+        print(f"Session saved to {path}", file=sys.stderr)
+        return path
+    except Exception as e:
+        print(f"Warning: failed to save session: {e}", file=sys.stderr)
+        return None
+
+
+def read_session_file(path: str) -> SavedSession:
+    with gzip.open(path, "rt", encoding="utf-8") as f:
+        data = json.load(f)
+    ctx = [
+        Message(role=m["role"], content=m["content"])
+        for m in data.get("messages", [])
+    ]
+    saved_model = data.get("model", {}) or {}
+    model = ModelMeta(
+        context_length=saved_model.get("context_length", -1),
+        model_name=saved_model.get("model_name", "unknown"),
+    )
+    return SavedSession(ctx=ctx, model=model)
+
+
+def check_context_length(saved: ModelMeta, current: ModelMeta) -> Optional[str]:
+    """Refuse a session recorded with a model that had a larger context."""
+    if saved.context_length <= 0 or current.context_length <= 0:
+        return None
+    if saved.context_length > current.context_length:
+        return (
+            f"it was saved with {saved.model_name} (context length "
+            f"{saved.context_length}), which is larger than the context "
+            f"length of {current.model_name} ({current.context_length})"
+        )
+    return None
+
+
+def resume_into(session: Session) -> bool:
+    """Replace the running session's history with the saved one, in place."""
+    path = session_file(session.cwd)
+    if not os.path.isfile(path):
+        print(f"Error: no saved session found at {path}", file=sys.stderr)
+        return False
+    try:
+        saved = read_session_file(path)
+    except Exception as e:
+        print(f"Error: failed to read session {path}: {e}", file=sys.stderr)
+        return False
+    if not saved.ctx:
+        print(f"Error: session file {path} contains no messages", file=sys.stderr)
+        return False
+    mismatch = check_context_length(saved.model, session.model)
+    if mismatch is not None:
+        # keep the running session untouched
+        print(f"Error: cannot resume {path}: {mismatch}", file=sys.stderr)
+        return False
+    session.ctx[:] = saved.ctx
+    print(f"Resumed session from {path} ({len(saved.ctx)} messages)", file=sys.stderr)
+    return True
 
 
 def session_add_usermsg(session: Session, content: str) -> None:
@@ -474,6 +601,15 @@ def print_help() -> None:
         "  --help     Show this help message and exit.\n"
         "  --batch    Exit after the task completes instead of prompting\n"
         "             for further input.\n"
+        "  --resume   Restore the session saved for the current directory.\n"
+        "\n"
+        "Prompt commands:\n"
+        "  /resume    Restore the saved session and continue from it.\n"
+        "\n"
+        "Sessions:\n"
+        "  On exit the conversation history is written, gzip compressed, to\n"
+        f"  {os.path.join(SESSION_DIR, SESSION_FILE)} in the current directory.\n"
+        "  Only the latest session is kept.\n"
         "\n"
         "Environment Variables:\n"
         "  BASHER_API_ENDPOINT  API endpoint URL (required)\n"
@@ -484,6 +620,16 @@ def print_help() -> None:
         "  BASHER_EXTRA_ARGS    (Optional) extra arguments, in json\n"
         "                       e.g. '{\"reasoning\": {\"effort\": \"xhigh\"}}'\n"
     )
+
+def read_user_input(session: Session, prompt: str = "> ") -> str:
+    """Read a line from the user, handling `/` commands. May raise EOFError."""
+    while True:
+        line = input(prompt).strip()
+        if line == "/resume":
+            resume_into(session)
+            continue
+        return line
+
 
 sys_prompt: List[str] = []
 
@@ -496,6 +642,7 @@ def main() -> None:
     # Parse command line arguments
     args = sys.argv[1:]
     batch_mode = False
+    resume_mode = False
 
     # Parse flag arguments
     while args and args[0].startswith("--"):
@@ -505,13 +652,19 @@ def main() -> None:
         elif args[0] == "--batch":
             batch_mode = True
             args = args[1:]
+        elif args[0] == "--resume":
+            resume_mode = True
+            args = args[1:]
         else:
             print(f"Unknown flag: {args[0]}", file=sys.stderr)
             sys.exit(-1)
 
     config = load_config()
     model = fetch_model_meta(config)
-    session = Session(ctx=[], model=model)
+    cwd = os.getcwd()
+    ensure_session_dir(cwd)
+
+    session = Session(ctx=[], model=model, cwd=cwd)
 
     sysp = sys_prompt[0]
 
@@ -521,24 +674,36 @@ def main() -> None:
             etc_agents_content = f.read()
         sysp += "\n\n---\n\n" + etc_agents_content
 
-    agents_md_path = os.path.join(os.getcwd(), "AGENTS.md")
+    agents_md_path = os.path.join(cwd, "AGENTS.md")
     if os.path.isfile(agents_md_path):
         with open(agents_md_path, encoding="utf-8") as f:
             agents_content = f.read()
         sysp += "\n\n---\n\n" + agents_content
 
     session_add_sysmsg(session, sysp)
+
+    # `--resume` is the same replacement `/resume` does, just done upfront
+    if resume_mode and not resume_into(session):
+        sys.exit(-1)
+
+    global _saved_session
+    _saved_session = session
+    atexit.register(lambda: save_session(_saved_session))
+
     task = " ".join(args).strip()
     while len(task) == 0:
         if batch_mode:
             print("Error: no task provided and --batch specified.", file=sys.stderr)
             sys.exit(-1)
         try:
-            task = input("> ")
+            task = read_user_input(session)
         except (KeyboardInterrupt, EOFError):
             print("Exit...", file=sys.stderr)
             sys.exit(0)
-    session_add_usermsg(session, " ".join(task))
+        # after a `/resume` the restored history is task enough
+        if not task and len(session.ctx) > 1:
+            task = "continue"
+    session_add_usermsg(session, task)
     while True:
         try:
             ai_response = run_llm(session.ctx, session, config)
@@ -548,10 +713,11 @@ def main() -> None:
             if isinstance(extract, BashError):
                 if has_finish(ai_response):
                     if batch_mode or not sys.stdin.isatty():
+                        save_session(session)
                         os._exit(0)
                     print(file=sys.stderr)
                     try:
-                        hint = input("> ")
+                        hint = read_user_input(session)
                     except (KeyboardInterrupt, EOFError):
                         print("Exit...", file=sys.stderr)
                         sys.exit(0)
@@ -571,7 +737,7 @@ def main() -> None:
                 sys.exit(0)
             print(file=sys.stderr)
             try:
-                hint = input("> ")
+                hint = read_user_input(session)
             except (KeyboardInterrupt, EOFError):
                 print("Exit...", file=sys.stderr)
                 sys.exit(0)

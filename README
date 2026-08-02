@@ -50,3 +50,23 @@ You can run the Basher CLI from your terminal like this:
     export BASHER_API_KEY='your_api_key_here'
     python basher.py 'your task here`'
 
+Sessions
+--------
+
+Basher creates `.basher/sessions/` in the directory it is started in. When it
+exits, the conversation history is written there as gzip compressed JSON:
+
+    .basher/sessions/session.json.gz
+
+Only one session is kept: each exit overwrites the previous file.
+
+To restore that session and keep working with it, either start Basher with
+`--resume`:
+
+    python basher.py --resume
+    python basher.py --resume 'and now also add tests'
+
+or type `/resume` at the `>` prompt of a running Basher. The restored history
+replaces the current one; press Enter on an empty prompt afterwards to just
+continue where the session left off.
+
