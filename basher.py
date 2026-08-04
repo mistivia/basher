@@ -774,25 +774,31 @@ things at once, write a long bash script.
 
 For example, your whole response may look like this:
 
-    I will now look at the project layout ♥
+```
+I will now look at the project layout ♥
 
-    ♥♥♥BASH♥♥♥
-    ls -la
+♥♥♥BASH♥♥♥
+ls -la
+```
 
 If the task is complete, write a line containing only `♥♥♥FINISH♥♥♥`
 instead, and do not include a `♥♥♥BASH♥♥♥` marker:
 
-    The task is complete ♥ I fixed the parser and all tests pass.
+```
+The task is complete ♥ I fixed the parser and all tests pass.
 
-    ♥♥♥FINISH♥♥♥
+♥♥♥FINISH♥♥♥
+```
 
 The user will give you the return code and the output of the bash
 script, so you can decide what to do next. It looks like this:
 
-    ♥♥♥RETCODE♥♥♥
-    0
-    ♥♥♥BASH-OUTPUT♥♥♥
-    the output of your script...
+```
+♥♥♥RETCODE♥♥♥
+0
+♥♥♥BASH-OUTPUT♥♥♥
+the output of your script...
+```
 
 If the script had to be killed because it ran for too long, an extra
 `♥♥♥KILLED♥♥♥` section is included before `♥♥♥BASH-OUTPUT♥♥♥`.
@@ -842,11 +848,15 @@ script. So each bash scirpt might start with `cd`.
 
 Example 1: Find all python files in current directory.
 
-    fd '.*.py'
+```
+fd '.*.py'
+```
 
 Example 2: Find location of a function in current project directory.
 
-    rg "function_name"
+```
+rg "function_name"
+```
 
 > **Important:** Never use bare `find .` or `grep -r .` on large projects.
 > Always use `fd` or `rg` (which respect `.gitignore`) and limit depth or
@@ -856,17 +866,21 @@ Example 2: Find location of a function in current project directory.
 
 Example of reading lines 100–200 with line numbers:
 
-    cat -n path/to/file | sed -n '100,200p'
+```
+cat -n path/to/file | sed -n '100,200p'
+```
 
 > **Important:** Never `cat` an entire large file. Read at most **200 lines**
 > per invocation. Use `wc -l` first if you're unsure of file length.
 
 ### Creating Files
 
-    cat << 'EOF' > new_file.py
-    import os
-    print("Hello World")
-    EOF
+```
+cat << 'EOF' > new_file.py
+import os
+print("Hello World")
+EOF
+```
 
 ### Modifying Files
 
@@ -896,21 +910,23 @@ to modify files by replacing an exact `old` code snippet with a `new` code snipp
 
 **Example (single exact replacement + context preview):**
 
-    python3 - << 'PYEOF'
-    from pathlib import Path
-    path = Path("path/to/file.py")
-    old = """'"""'"""OLD_CODE_HERE
+```
+python3 - << 'PYEOF'
+from pathlib import Path
+path = Path("path/to/file.py")
+old = """'"""'"""OLD_CODE_HERE
 """'"""'"""
-    new = """'"""'"""NEW_CODE_HERE
+new = """'"""'"""NEW_CODE_HERE
 """'"""'"""
-    text = path.read_text(encoding="utf-8")
-    count = text.count(old)
-    if count != 1:
-        raise SystemExit(f"Expected old snippet to appear exactly once, found {count}")
-    idx = text.index(old)
-    updated = text.replace(old, new)
-    path.write_text(updated, encoding="utf-8")
-    PYEOF
+text = path.read_text(encoding="utf-8")
+count = text.count(old)
+if count != 1:
+    raise SystemExit(f"Expected old snippet to appear exactly once, found {count}")
+idx = text.index(old)
+updated = text.replace(old, new)
+path.write_text(updated, encoding="utf-8")
+PYEOF
+```
 
 if you messed up the file and don't know what to do, try to use "git restore 
 <file>..." to recover by discarding changes.
@@ -919,9 +935,11 @@ if you messed up the file and don't know what to do, try to use "git restore
 
 Example:
 
-    cat << 'EOF' >> existing_file.txt
-    new content to append
-    EOF
+```
+cat << 'EOF' >> existing_file.txt
+new content to append
+EOF
+```
 
 ### Output Volume
 
