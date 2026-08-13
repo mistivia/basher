@@ -26,12 +26,12 @@ VER = "1.0.0"
 SESSION_DIR = os.path.join(".basher", "sessions")
 SESSION_FILE = "session.json.gz"
 
-MARK_BASH = "♥♥♥BASH♥♥♥"
-MARK_FINISH = "♥♥♥FINISH♥♥♥"
-MARK_RETCODE = "♥♥♥RETCODE♥♥♥"
-MARK_BASH_OUTPUT = "♥♥♥BASH-OUTPUT♥♥♥"
-MARK_KILLED = "♥♥♥KILLED♥♥♥"
-MARK_ANSWER = "♥♥♥ANSWER♥♥♥"
+MARK_BASH = "# ♥♥♥BASH♥♥♥"
+MARK_FINISH = "# ♥♥♥FINISH♥♥♥"
+MARK_RETCODE = "# ♥♥♥RETCODE♥♥♥"
+MARK_BASH_OUTPUT = "# ♥♥♥BASH OUTPUT♥♥♥"
+MARK_KILLED = "# ♥♥♥KILLED♥♥♥"
+MARK_ANSWER = "# ♥♥♥ANSWER♥♥♥"
 
 
 def _marker_re(marker: str) -> "re.Pattern[str]":
@@ -760,7 +760,7 @@ for driving the process. The only thing you can use is Bash.
 
 Whenever you need to do an action, you tell the user the bash script
 you want to run. Do NOT use JSON or XML. Instead write a line
-containing only the marker `♥♥♥BASH♥♥♥`, and then write your bash
+containing only the marker `# ♥♥♥BASH♥♥♥`, and then write your bash
 script.
 
 **The script begins on the line right after the marker and continues
@@ -768,40 +768,41 @@ to the very end of your response.** So everything you want to say must
 come BEFORE the marker. Do not wrap the script in code fences, and do
 not write anything after it.
 
-Each response may contain **at most one** `♥♥♥BASH♥♥♥` marker, so you
+Each response may contain **at most one** `# ♥♥♥BASH♥♥♥` marker, so you
 give one and only one bash script per response. If you want to do many
 things at once, write a long bash script.
 
 For example, your whole response may look like this:
 
-```
-I will now look at the project layout ♥
+    I will now look at the project layout ♥
 
-♥♥♥BASH♥♥♥
-ls -la
-```
+    # ♥♥♥BASH♥♥♥
 
-If the task is complete, write a line containing only `♥♥♥FINISH♥♥♥`
-instead, and do not include a `♥♥♥BASH♥♥♥` marker:
+    ```
+    ls -la
+    ```
 
-```
-The task is complete ♥ I fixed the parser and all tests pass.
+If the task is complete, write a line containing only `# ♥♥♥FINISH♥♥♥`
+instead, and do not include a `# ♥♥♥BASH♥♥♥` marker:
 
-♥♥♥FINISH♥♥♥
-```
+    The task is complete ♥ I fixed the parser and all tests pass.
+
+    # ♥♥♥FINISH♥♥♥
+
 
 The user will give you the return code and the output of the bash
 script, so you can decide what to do next. It looks like this:
 
-```
-♥♥♥RETCODE♥♥♥
-0
-♥♥♥BASH-OUTPUT♥♥♥
-the output of your script...
-```
+    # ♥♥♥RETCODE♥♥♥
+
+    0
+
+    # ♥♥♥BASH OUTPUT♥♥♥
+
+    the output of your script...
 
 If the script had to be killed because it ran for too long, an extra
-`♥♥♥KILLED♥♥♥` section is included before `♥♥♥BASH-OUTPUT♥♥♥`.
+`# ♥♥♥KILLED♥♥♥` section is included before `# ♥♥♥BASH OUTPUT♥♥♥`.
 
 ---
 
@@ -837,7 +838,7 @@ For every task, follow this sequence:
 
 The snippets below show script bodies only. Remember that in a real
 response the body must be preceded by a line containing only
-`♥♥♥BASH♥♥♥`, and nothing may follow it.
+`# ♥♥♥BASH♥♥♥`, and nothing may follow it.
 
 ## Current Directory
 
@@ -954,7 +955,7 @@ add filter or pagination.
 When the task is fully done:
 1. Summarize all changes (what was changed, why).
 2. Report test/build results if applicable.
-3. Output a line containing only `♥♥♥FINISH♥♥♥`.
+3. Output a line containing only `# ♥♥♥FINISH♥♥♥`.
 
 ---
 
