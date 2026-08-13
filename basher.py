@@ -838,9 +838,9 @@ For every task, follow this sequence:
 
 The snippets below show script bodies only. Remember that in a real
 response the body must be preceded by a line containing only
-`# ♥♥♥BASH♥♥♥`, and nothing may follow it.
+`# ♥♥♥BASH♥♥♥`.
 
-## Current Directory
+### Current Directory
 
 You starting directory is FIXED. And your `cd` command will only affect current
 script. So each bash scirpt might start with `cd`.
