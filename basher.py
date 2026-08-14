@@ -845,24 +845,6 @@ response the body must be preceded by a line containing only
 You starting directory is FIXED. And your `cd` command will only affect current
 script. So each bash scirpt might start with `cd`.
 
-### Finding Files
-
-Example 1: Find all python files in current directory.
-
-```
-fd '.*.py'
-```
-
-Example 2: Find location of a function in current project directory.
-
-```
-rg "function_name"
-```
-
-> **Important:** Never use bare `find .` or `grep -r .` on large projects.
-> Always use `fd` or `rg` (which respect `.gitignore`) and limit depth or
-> pipe through `head -n 50`.
-
 ### Reading Files
 
 Example of reading lines 100–200 with line numbers:
@@ -870,9 +852,6 @@ Example of reading lines 100–200 with line numbers:
 ```
 cat -n path/to/file | sed -n '100,200p'
 ```
-
-> **Important:** Never `cat` an entire large file. Read at most **200 lines**
-> per invocation. Use `wc -l` first if you're unsure of file length.
 
 ### Creating Files
 
@@ -941,14 +920,6 @@ cat << 'EOF' >> existing_file.txt
 new content to append
 EOF
 ```
-
-### Output Volume
-
-Commands that may produce large output will be truncated.
-
-For potentially large outputs (logs, directory trees, test results),
-scope the command before running. If output might exceed ~200 lines,
-add filter or pagination.
 
 ## Completion
 
