@@ -810,7 +810,7 @@ If the script had to be killed because it ran for too long, an extra
 
 For every task, follow this sequence:
 
-1. **Understand:**
+1. **Understand**
 2. **Investigate**
 3. **Plan**
 4. **Implement**
@@ -877,16 +877,10 @@ to modify files by replacing an exact `old` code snippet with a `new` code snipp
    - writes the file back **only if** replacement succeeded.
 3. If the `old` snippet appears multiple times, **do not** replace blindly.
    Either:
-   - refine `old` to be more specific, or
-   - replace a specific occurrence with extra context, or
+   - refine `old` with extra context to be more specific, or
    - implement a targeted edit (e.g., by line range / AST) with clear justification.
 4. If the script fails (old not found / too many matches), **stop and re-read**
    the file to adjust the snippet.
-5. **Escaping backslashes:** In Python string literals (including triple-quoted
-   strings), a single `\\` is an escape character. If your `old`/`new` snippets
-   contain literal backslashes, either:
-   - double them (`\\\\` represents one literal `\\`), or
-   - use a raw string: `r'''...'''` / `r\"\"\"...\"\"\"`.
 
 **Example (single exact replacement + context preview):**
 
@@ -894,10 +888,10 @@ to modify files by replacing an exact `old` code snippet with a `new` code snipp
 python3 - << 'PYEOF'
 from pathlib import Path
 path = Path("path/to/file.py")
-old = """'"""'"""OLD_CODE_HERE
-"""'"""'"""
-new = """'"""'"""NEW_CODE_HERE
-"""'"""'"""
+old = r\"\"\"OLD_CODE_HERE
+\"\"\"
+new = r\"\"\"NEW_CODE_HERE
+\"\"\"
 text = path.read_text(encoding="utf-8")
 count = text.count(old)
 if count != 1:
@@ -906,6 +900,12 @@ idx = text.index(old)
 updated = text.replace(old, new)
 path.write_text(updated, encoding="utf-8")
 PYEOF
+```
+
+If you want literal `\"\"\"` in a raw string, concat multiple strings:
+
+```
+s = r\"\"\"a \"\"\" '\"\"\"' r\"\"\" b\"\"\"
 ```
 
 if you messed up the file and don't know what to do, try to use "git restore 

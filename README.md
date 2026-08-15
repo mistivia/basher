@@ -8,13 +8,6 @@ The only tool Basher ever uses is Bash. Whether it's finding, reading, or editin
 
 To use Basher, ensure you have Python 3 installed. Basher only uses Python standard library. No other Python dependencies are required.
 
-But Basher depends on these command line utils:
-
-- `rg`
-- `fd`
-
-Please make sure you have installed them.
-
 Then run:
 
 ```bash
