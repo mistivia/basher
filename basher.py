@@ -380,8 +380,8 @@ def strip_code_fence(s: str) -> str:
 
 
 def extract_bash_cmd(s: str) -> BashCmdExtract:
-    matches = list(BASH_MARKER_RE.finditer(s))
-    if not matches:
+    match = BASH_MARKER_RE.search(s)
+    if match is None:
         return BashError(
             error=(
                 "No executable bash commands found. Please provide a bash script "
@@ -390,14 +390,7 @@ def extract_bash_cmd(s: str) -> BashCmdExtract:
                 f"what you have done and output `{MARK_FINISH}`."
             ),
         )
-    if len(matches) > 1:
-        return BashError(
-            error=(
-                "Only one script can be executed at a time. Please provide a single "
-                f"`{MARK_BASH}` marker, with the whole script after it."
-            ),
-        )
-    cmd = textwrap.dedent(strip_code_fence(s[matches[0].end():].strip("\n"))).strip()
+    cmd = textwrap.dedent(strip_code_fence(s[match.end():].strip("\n"))).strip()
     if not cmd:
         return BashError(
             error=(
